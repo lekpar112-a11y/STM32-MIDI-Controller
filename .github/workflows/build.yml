@@ -1,12 +1,28 @@
-#include <Arduino.h>
+name: PlatformIO Compile
 
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-  Serial.println("Build from web successful!");
-}
+on: [push]
 
-void loop() {
-  // put your main code here, to run repeatedly:
-  delay(1000);
-}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Run PlatformIO Build
+        run: pio run
+
+      - name: Archive Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: .pio/build/bluepill_f103c8/firmware.bin
