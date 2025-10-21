@@ -1,12 +1,18 @@
-#include <Arduino.h>
+name: PlatformIO Compile
 
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-  Serial.println("Build from web successful!");
-}
+on: [push]
 
-void loop() {
-  // put your main code here, to run repeatedly:
-  delay(1000);
-}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - run: pip install platformio
+
+      - run: pio run
