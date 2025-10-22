@@ -1,18 +1,30 @@
 name: PlatformIO Compile
 
-on: [push]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: '3.11'
 
-      - run: pip install platformio
+      - name: Install PlatformIO
+        run: pip install platformio
 
-      - run: pio run
+      - name: Build firmware
+        run: platformio run
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluepill-firmware
+          path: .pio/build/bluepill_f103c8/firmware.*
