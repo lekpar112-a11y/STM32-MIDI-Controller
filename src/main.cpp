@@ -1,5 +1,5 @@
 /* 
- * SynthController.cpp - Versi 1.3
+ * SynthController.cpp - Versi 1.3.1 (Lengkap)
  * Firmware Final dengan Multi-Interface MIDI Controller
  * Fitur: USB MIDI, Hardware MIDI (DIN-5), dan BLE MIDI (via HM-10)
  * Penulis: Assistant & lekpar112-a11y
@@ -16,26 +16,26 @@
 
 /* ---------- KONFIGURASI PIN ---------- */
 // Matrix pins
-const uint8_t ROW_PINS[8] = {PA0, PA1, PA4, PA5, PA6, PA7, PB12, PB13}; // Disesuaikan agar tidak bentrok
-const uint8_t COL_PINS[8] = {PB14, PB15, PC13, PC14, PC15, PA8, PA11, PA12};
+const uint8_t ROW_PINS[8] = {PA4, PA5, PA6, PA7, PB12, PB13, PB14, PB15};
+const uint8_t COL_PINS[8] = {PC13, PC14, PC15, PA8, PA11, PA12, PB3, PB4};
 
 // Analog pins
 const uint8_t PIN_PITCH_X     = PA0; // A0
 const uint8_t PIN_PITCH_Y     = PA1; // A1
-const uint8_t PIN_POT_MASTER  = PA4; // A4
 
 // Pin yang dipindahkan untuk memberi ruang bagi BLE_MIDI_SERIAL (PA2, PA3)
 const uint8_t PIN_PITCH_WHEEL = PB0; // Dipindahkan dari A2
 const uint8_t PIN_POT_BALANCE = PB1; // Dipindahkan dari A3
+const uint8_t PIN_POT_MASTER  = PB10;
 
 // EQ sliders
 const uint8_t PIN_EQ[3] = {PA5, PA6, PA7}; // Menggunakan pin A5, A6, A7
 
 // Switches
-const uint8_t PIN_VELOCITY_ENABLE_SW = PB3;
-const uint8_t PIN_CHORD_SCAN_SW    = PB4;
-const uint8_t PIN_TEMPO_ENABLE_SW  = PB5;
-const uint8_t PIN_TEMPO_MODE_SW    = PB10;
+const uint8_t PIN_VELOCITY_ENABLE_SW = PB5;
+const uint8_t PIN_CHORD_SCAN_SW    = PB10; // Shared with a pot, might need adjustment
+const uint8_t PIN_TEMPO_ENABLE_SW  = PC13; // Shared with matrix, physical button might be better
+const uint8_t PIN_TEMPO_MODE_SW    = PC14; // Shared with matrix
 
 // Rotary encoder (di pin yang aman dari konflik)
 const uint8_t PIN_ENCODER_A  = PB6;
@@ -53,7 +53,6 @@ bool tempoEnabled = false;
 uint8_t tempoBeats = 4;
 int currentOctaveOffset = 0;
 int transpose = 0;
-int tempo = 120;
 
 uint8_t matrixState[8][8];
 unsigned long lastDebounce[8][8];
@@ -62,20 +61,16 @@ volatile int encoderPos = 0;
 volatile bool encoderMoved = false;
 
 unsigned long lastScanTime = 0;
-const unsigned long SCAN_INTERVAL = 6; 
+const unsigned long SCAN_INTERVAL = 5; 
 
-// Fungsi untuk mengirim pesan MIDI ke SEMUA interface
 void sendMidiMessage(uint8_t* message, uint8_t size) {
-    // 1. Kirim ke Hardware MIDI (DIN-5)
     HW_MIDI_SERIAL.write(message, size);
-
-    // 2. Kirim ke USB MIDI (jika terhubung)
     #if defined(USBCON)
         USB_MIDI_SERIAL.write(message, size);
     #endif
-
-    // 3. Kirim ke BLE MIDI
-    BLE.write(message, size);
+    if (BLE.isConnected()) {
+        BLE.write(message, size);
+    }
 }
 
 void midiSendNoteOn(uint8_t ch, uint8_t note, uint8_t vel) {
@@ -102,37 +97,119 @@ void midiSendPitchbend(uint8_t ch, int value14) {
     sendMidiMessage(msg, sizeof(msg));
 }
 
-// ... [ Semua fungsi lain (scanMatrix, readAnalogs, chordDetector, encoderISR, dll.) dari kode sebelumnya bisa ditempel di sini TANPA PERUBAHAN ] ...
-// Pastikan semua fungsi tersebut memanggil midiSendNoteOn, midiSendCC, dll. yang sudah kita modifikasi di atas.
+void setupPadMap() {
+  for (int i=0; i<64; ++i) {
+    padNoteMap[i] = BASE_NOTE + i;
+  }
+}
 
+void scanMatrix() {
+  for (int c=0; c<8; ++c) {
+    pinMode(COL_PINS[c], OUTPUT);
+    digitalWrite(COL_PINS[c], LOW);
+    for (int r=0; r<8; ++r) {
+      pinMode(ROW_PINS[r], INPUT_PULLUP);
+      bool pressed = (digitalRead(ROW_PINS[r]) == LOW);
+      if (pressed != matrixState[r][c]) {
+        if (millis() - lastDebounce[r][c] > DEBOUNCE_MS) {
+          lastDebounce[r][c] = millis();
+          matrixState[r][c] = pressed;
+          uint8_t note = padNoteMap[r*8 + c] + (currentOctaveOffset*12) + transpose;
+          if (pressed) {
+            midiSendNoteOn(MIDI_CHANNEL, note, 100);
+          } else {
+            midiSendNoteOff(MIDI_CHANNEL, note, 0);
+          }
+        }
+      }
+    }
+    pinMode(COL_PINS[c], INPUT); // High-impedance
+  }
+}
+
+void readAnalogs() {
+  int pbx = map(analogRead(PIN_PITCH_X), 0, 1023, 0, 16383);
+  midiSendPitchbend(MIDI_CHANNEL, pbx);
+
+  int vol = map(analogRead(PIN_POT_MASTER), 0, 1023, 0, 127);
+  midiSendCC(MIDI_CHANNEL, 7, vol);
+
+  int pan = map(analogRead(PIN_POT_BALANCE), 0, 1023, 0, 127);
+  midiSendCC(MIDI_CHANNEL, 10, pan);
+
+  for(int i=0; i<3; ++i) {
+    int eq_val = map(analogRead(PIN_EQ[i]), 0, 1023, 0, 127);
+    midiSendCC(MIDI_CHANNEL, 20+i, eq_val);
+  }
+}
+
+void encoderISR() {
+  static uint8_t last = 0;
+  uint8_t s = (digitalRead(PIN_ENCODER_A) << 1) | digitalRead(PIN_ENCODER_B);
+  if (s == last) return;
+  if ((last == 0b00 && s == 0b01) || (last == 0b01 && s == 0b11) || (last == 0b11 && s == 0b10) || (last == 0b10 && s == 0b00)) {
+    encoderPos++;
+  } else {
+    encoderPos--;
+  }
+  last = s;
+  encoderMoved = true;
+}
+
+void setupPins() {
+  for(int i=0; i<8; ++i) {
+    pinMode(ROW_PINS[i], INPUT_PULLUP);
+    pinMode(COL_PINS[i], INPUT);
+  }
+  pinMode(PIN_ENCODER_A, INPUT_PULLUP);
+  pinMode(PIN_ENCODER_B, INPUT_PULLUP);
+  pinMode(PIN_ENCODER_SW, INPUT_PULLUP);
+}
 
 void setup() {
-    Serial.begin(115200); // Serial untuk debug, BUKAN untuk MIDI USB
-    Serial.println("Starting Multi-Interface MIDI Controller v1.3...");
+    Serial.begin(115200);
+    Serial.println("Starting Multi-Interface MIDI Controller v1.3.1...");
 
-    // Inisialisasi Hardware MIDI (DIN-5)
     HW_MIDI_SERIAL.begin(31250);
-
-    // Inisialisasi Serial untuk modul BLE
-    BLE_MIDI_SERIAL.begin(9600); // 9600 adalah baud rate default untuk HM-10
-
-    // Inisialisasi dan mulai server BLE MIDI
-    // Nama ini yang akan muncul saat Anda mencari perangkat Bluetooth
+    BLE_MIDI_SERIAL.begin(9600);
+    
     BLE.begin("STM32 BLE MIDI", BLE_MIDI_SERIAL);
     Serial.println("BLE MIDI Server Started.");
 
-    #if defined(USBCON)
-      // MIDI USB akan di-handle secara otomatis oleh core STM32
-      Serial.println("USB MIDI Enabled.");
-    #endif
-    
-    // ... [ Panggil semua fungsi setup lain seperti setupPins(), setupPadMap(), attachInterrupt(...) ] ...
+    setupPins();
+    setupPadMap();
+
+    attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
 }
 
 void loop() {
-    // WAJIB: Terus perbarui koneksi BLE.
-    // Fungsi ini menangani koneksi, pairing, dan pengiriman data.
-    BLE.poll();
+    if (BLE.isConnected()) {
+      BLE.poll();
+    }
+    
+    unsigned long now = millis();
+    if (now - lastScanTime > SCAN_INTERVAL) {
+        lastScanTime = now;
+        scanMatrix();
+        readAnalogs();
+    }
 
-    // ... [ Panggil semua fungsi lain di dalam loop seperti scanMatrix(), readAnalogs(), dll. seperti kode sebelumnya ] ...
+    if (encoderMoved) {
+        noInterrupts();
+        int pos = encoderPos;
+        encoderPos = 0;
+        encoderMoved = false;
+        interrupts();
+
+        if (digitalRead(PIN_ENCODER_SW) == LOW) { // Change octave
+          currentOctaveOffset += (pos > 0) ? 1 : -1;
+          if (currentOctaveOffset > 2) currentOctaveOffset = 2;
+          if (currentOctaveOffset < -2) currentOctaveOffset = -2;
+        } else { // Change transpose
+          transpose += (pos > 0) ? 1 : -1;
+          if (transpose > 12) transpose = 12;
+          if (transpose < -12) transpose = -12;
+        }
+    }
 }
