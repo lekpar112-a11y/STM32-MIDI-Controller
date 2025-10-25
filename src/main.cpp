@@ -25,7 +25,7 @@ const uint8_t PIN_POT_BALANCE = A3;    // pan
 const uint8_t PIN_POT_MASTER = A4;     // master volume
 
 // EQ sliders (8)
-const uint8_t PIN_EQ[8] = {A5, A6, A7, A8, A9, A10, A11, A12}; // if not enough analog pins use CD4051 mux
+const uint8_t PIN_EQ[3] = {A5, A6, A7, A8, A9, A10, A11, A12}; // if not enough analog pins use CD4051 mux
 
 // Velocity sensors using analog inputs (example 32 sensors via matrix + multiplexers)
 const bool USE_VELOCITY = true;
@@ -234,7 +234,7 @@ void readAnalogs() {
   midiSendCC(MIDI_CHANNEL, 7, map(vol, 0, 1023, 0, 127)); // CC7 volume
 
   // EQ sliders
-  for (int i=0;i<8;i++){
+  for (int i=0;i<3;i++){
     int v = analogRead(PIN_EQ[i]);
     midiSendCC(MIDI_CHANNEL, 70 + i, map(v, 0, 1023, 0, 127));
     // keep very short gap to avoid saturating serial
