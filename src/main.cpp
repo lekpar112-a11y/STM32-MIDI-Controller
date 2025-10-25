@@ -37,9 +37,9 @@ const uint8_t PIN_TEMPO_ENABLE_SW = PC15;
 const uint8_t PIN_TEMPO_MODE_SW = PB15; // cycles 2/3/4 beats
 
 // Rotary encoder pins + encoder button
-const uint8_t PIN_ENCODER_A = PA8;
-const uint8_t PIN_ENCODER_B = PA9;
-const uint8_t PIN_ENCODER_SW = PA10;
+const uint8_t PIN_ENCODER_A = PA6;
+const uint8_t PIN_ENCODER_B = PA7;
+const uint8_t PIN_ENCODER_SW = PA8;
 
 // MIDI output selection
 // We'll send MIDI on Serial1 at 31250 (DIN) and also on Serial (USB CDC) if available.
