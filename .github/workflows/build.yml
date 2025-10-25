@@ -1,5 +1,5 @@
 # GitHub Action for PlatformIO
-# Versi Final dengan Actions yang Diperbarui dan Clean Build
+# Versi Final dengan Instalasi Library Secara Paksa
 
 name: PlatformIO Compile
 
@@ -16,9 +16,10 @@ jobs:
       - name: Install PlatformIO Core
         run: pip install --upgrade platformio
 
-      - name: Clean project
-        # TAMBAHKAN BARIS INI: Membersihkan build sebelumnya untuk jaga-jaga
-        run: pio run --target clean
+      - name: Force Install BLE-MIDI Library
+        # INI ADALAH PERINTAH KUNCI YANG BARU!
+        # Kita paksa instalasi library secara manual.
+        run: pio lib install "lathoub/BLE-MIDI"
 
       - name: Build PlatformIO Project
         run: pio run
