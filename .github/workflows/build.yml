@@ -1,0 +1,26 @@
+name: PlatformIO Compile
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Force Install BLE-MIDI Library
+        run: pio lib install "lathoub/BLE-MIDI"
+
+      - name: Build PlatformIO Project
+        run: pio run
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: .pio/build/bluepill_f103c8/firmware.bin
