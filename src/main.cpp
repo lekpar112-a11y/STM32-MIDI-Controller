@@ -1,30 +1,35 @@
 #include <Arduino.h>
-#include <MIDI.h>
-#include <BLEMidi.h>
+#include <Adafruit_BLE.h>
+#include <Adafruit_BluefruitLE_UART.h>
+#include <bluefruit.h>
 
-// Buat objek MIDI untuk setiap output
-MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, hwMidi);
-MIDI_CREATE_INSTANCE(Stream, BLE, bleMidi);            
+// Ganti Serial2 dengan port yang Anda gunakan untuk modul BLE
+Adafruit_BluefruitLE_UART ble(Serial2);
 
-#define BLE_MIDI_SERIAL Serial2
+// (Fungsi-fungsi pembantu Anda seperti scanMatrix, dll. perlu diadaptasi)
 
-// ... (Fungsi-fungsi pembantu Anda seperti scanMatrix, readAnalogs, dll. perlu diadaptasi di sini)
-
-// Contoh fungsi yang diadaptasi
-void sendNoteOnToAll(byte channel, byte pitch, byte velocity) {
-    hwMidi.sendNoteOn(pitch, velocity, channel);
-    bleMidi.sendNoteOn(pitch, velocity, channel);
-    // Kode untuk USB MIDI perlu ditambahkan di sini secara manual
+void sendMidiBle(uint8_t *msg, uint8_t len) {
+    if (ble.isConnected()) {
+        ble.write(msg, len);
+    }
 }
 
 void setup() {
-    hwMidi.begin(MIDI_CHANNEL_OMNI);
-    BLE_MIDI_SERIAL.begin(9600);
-    bleMidi.begin(MIDI_CHANNEL_OMNI);
-    BLE.begin("STM32 BLE MIDI", BLE_MIDI_SERIAL);
+    Serial.begin(115200);
+    Serial.println("Adafruit BLE MIDI Controller");
+
+    ble.begin(true);
+    ble.setMode(BLUEFRUIT_MODE_DATA);
+    ble.factoryReset(); // Opsional, untuk memastikan bersih
+    ble.setDeviceName("STM32-BLE-MIDI");
 }
 
 void loop() {
-    BLE.poll();
-    // Panggil fungsi-fungsi Anda di sini
+    // Contoh: Kirim not C4 setiap detik
+    uint8_t noteOn[] = {0x90, 60, 127};
+    sendMidiBle(noteOn, sizeof(noteOn));
+    delay(500);
+    uint8_t noteOff[] = {0x80, 60, 0};
+    sendMidiBle(noteOff, sizeof(noteOff));
+    delay(500);
 }
