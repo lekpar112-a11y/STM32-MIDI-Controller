@@ -1,7 +1,3 @@
-/* 
- * SynthController.cpp - Versi Reset Final 2
- * Firmware dengan Multi-Interface MIDI Controller
-*/
 #include <Arduino.h>
 #include <BLEMidi.h> 
 
@@ -9,7 +5,6 @@
 #define BLE_MIDI_SERIAL Serial2 
 #define USB_MIDI_SERIAL Serial  
 
-/* PIN CONFIG */
 const uint8_t ROW_PINS[8] = {PA4, PA5, PA6, PA7, PB12, PB13, PB14, PB15};
 const uint8_t COL_PINS[8] = {PC13, PC14, PC15, PA8, PA11, PA12, PB3, PB4};
 const uint8_t PIN_PITCH_X     = PA0; 
@@ -22,7 +17,6 @@ const uint8_t PIN_ENCODER_A  = PB6;
 const uint8_t PIN_ENCODER_B  = PB7;
 const uint8_t PIN_ENCODER_SW = PB8;
 
-/* STATE VARS */
 const uint16_t MIDI_CHANNEL = 1; 
 const uint8_t BASE_NOTE = 48; 
 uint8_t padNoteMap[64];
@@ -34,7 +28,6 @@ volatile int encoderPos = 0;
 volatile bool encoderMoved = false;
 unsigned long lastScanTime = 0;
 
-/* MIDI SEND FUNCTIONS */
 void sendMidiMessage(uint8_t* message, uint8_t size) {
     HW_MIDI_SERIAL.write(message, size);
     #if defined(USBCON)
@@ -55,7 +48,6 @@ void midiSendCC(uint8_t ch, uint8_t cc, uint8_t val) {
     sendMidiMessage(msg, sizeof(msg));
 }
 
-/* HELPER FUNCTIONS */
 void setupPadMap() {
   for (int i=0; i<64; ++i) { padNoteMap[i] = BASE_NOTE + i; }
 }
@@ -79,16 +71,12 @@ void scanMatrix() {
 void readAnalogs() {
   midiSendCC(MIDI_CHANNEL, 7, map(analogRead(PIN_POT_MASTER), 0, 1023, 0, 127));
 }
-void encoderISR() {
-  // Simple encoder logic here
-  encoderMoved = true;
-}
+void encoderISR() { encoderMoved = true; }
 void setupPins() {
   for(int i=0; i<8; ++i) { pinMode(ROW_PINS[i], INPUT_PULLUP); pinMode(COL_PINS[i], INPUT); }
   pinMode(PIN_ENCODER_A, INPUT_PULLUP); pinMode(PIN_ENCODER_B, INPUT_PULLUP); pinMode(PIN_ENCODER_SW, INPUT_PULLUP);
 }
 
-/* MAIN */
 void setup() {
     Serial.begin(115200);
     HW_MIDI_SERIAL.begin(31250);
