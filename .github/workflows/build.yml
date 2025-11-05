@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Langkah 1: Mengunduh kode dari repositori Anda
+      # Langkah 1: Mengunduh kode dari repositori Anda (diperbarui ke v4)
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Langkah 2: Menginstal Python, yang dibutuhkan oleh PlatformIO
+      # Langkah 2: Menginstal Python (diperbarui ke v5)
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
@@ -30,14 +30,14 @@ jobs:
           pip install -U platformio
 
       # Langkah 4: Menjalankan proses kompilasi (build)
-      # Perintah ini secara spesifik menggunakan environment 'bluepill_f103c6' dari file platformio.ini Anda
       - name: Build PlatformIO project
         run: pio run -e bluepill_f103c6
 
       # Langkah 5: Mengunggah hasil kompilasi (firmware.bin) sebagai artefak
-      # Path menggunakan wildcard (*) agar lebih fleksibel dan tidak error lagi
+      # --- INI ADALAH PERUBAHAN UTAMA ---
+      # Versi diperbarui dari @v3 ke @v4 untuk memperbaiki error
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: firmware-bin
           path: .pio/build/*/firmware.bin
