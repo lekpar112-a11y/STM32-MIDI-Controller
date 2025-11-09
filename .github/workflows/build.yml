@@ -6,13 +6,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
       - name: Install PlatformIO
         run: pip install platformio
+
       - name: Build
         run: platformio run
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: firmware-bin
           path: .pio/build/bluepill_f103c6/firmware.bin
