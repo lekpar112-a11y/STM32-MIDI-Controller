@@ -1,90 +1,88 @@
 /* velar_controller.ino
    Full STM32 sketch (Arduino core) for 8x8 matrix MIDI controller + many features
-   - Remapped pins to avoid conflicts
-   - Added VELOCITY toggle button + VELOCITY pot (PC0 = pot analog, PC1 = toggle switch)
-   - Keeps all original features (matrix, universal 40 buttons, 6x CD4051 EQ, 5 direct ADC EQs,
-     joystick, encoder modes, tempo, pitchbend switch, LED, UART DIN MIDI on Serial1)
-   NOTE: verify MCU package pin availability before upload.
+   - Pin names fixed to STM32 Arduino core style (e.g. PA_0, PB_15, PC_2)
+   - Keeps all original features. If any pin not present on your MCU package,
+     tell me the exact MCU model and I'll remap.
 */
 
 #include <Arduino.h>
 
-/* ---------- REMAPPED PINS (safe mapping attempt) ---------- */
+/* ---------- REMAPPED PINS (STM32 naming with underscores) ---------- */
 /* Strategy:
-   - Rows: PB0..PB7 (digital inputs)
-   - Cols: PB8..PB15 (digital outputs)
-   - ADC analog signals on PAx / PCx where possible
-   - CD4051 control on PC2..PC5
-   - Universal MUX EN on PC6..PC10
-   - Velocity pot on PC0, velocity toggle on PC1
+   - Rows: PB_0..PB_7 (digital inputs)
+   - Cols: PB_8..PB_15 (digital outputs)
+   - ADC analog signals on PA_x / PC_x where possible
+   - CD4051 control on PC_2..PC_5
+   - Universal MUX EN on PC_6..PC_10
+   - Velocity pot on PC_0, velocity toggle on PC_1
 */
 
 //
 // MATRIX 8x8
 //
-const uint8_t ROW_PINS[8] = {PB0, PB1, PB2, PB3, PB4, PB5, PB6, PB7};
-const uint8_t COL_PINS[8] = {PB8, PB9, PB10, PB11, PB12, PB13, PB14, PB15};
+const uint8_t ROW_PINS[8] = {PB_0, PB_1, PB_2, PB_3, PB_4, PB_5, PB_6, PB_7};
+const uint8_t COL_PINS[8] = {PB_8, PB_9, PB_10, PB_11, PB_12, PB_13, PB_14, PB_15};
 
 //
 // JOYSTICK X/Y (ADC)
 //
-const uint8_t PIN_PITCH_X = PA6;
-const uint8_t PIN_PITCH_Y = PA7;
+const uint8_t PIN_PITCH_X = PA_6;
+const uint8_t PIN_PITCH_Y = PA_7;
 
 //
 // MASTER & BALANCE (ADC)
 //
-const uint8_t PIN_POT_BALANCE = PA3;
-const uint8_t PIN_POT_MASTER  = PA4;
+const uint8_t PIN_POT_BALANCE = PA_3;
+const uint8_t PIN_POT_MASTER  = PA_4;
 
 //
 // 5 direct ADC for EQ 1..5
 //
-const uint8_t PIN_EQ_ADC[5] = {PA0, PA1, PA2, PA5, PA8}; // verify PA8 on your package
+const uint8_t PIN_EQ_ADC[5] = {PA_0, PA_1, PA_2, PA_5, PA_8}; // verify PA_8 on your package
 
 //
 // CD4051 for EQ 6-8 (single 4051)
 //
-const uint8_t MUX_S0  = PC2;
-const uint8_t MUX_S1  = PC3;
-const uint8_t MUX_S2  = PC4;
-const uint8_t MUX_EN  = PC5;   // active LOW
-const uint8_t MUX_COM = PA7;   // ADC input for EQ 6..8 (same as joystick Y used as ADC reading conflicts avoided by usage ordering)
+const uint8_t MUX_S0  = PC_2;
+const uint8_t MUX_S1  = PC_3;
+const uint8_t MUX_S2  = PC_4;
+const uint8_t MUX_EN  = PC_5;   // active LOW
+const uint8_t MUX_COM = PA_7;   // ADC input for EQ 6..8 (NOTE: same pin as PIN_PITCH_Y in this mapping)
 
 //
 // UNIVERSAL 40 BUTTON (5×CD4051)
 //
-const uint8_t UNIVERSAL_MUX_EN[5] = {PC6, PC7, PC8, PC9, PC10};
-const uint8_t UNIVERSAL_MUX_COM   = PB9;   // input pullup
+const uint8_t UNIVERSAL_MUX_EN[5] = {PC_6, PC_7, PC_8, PC_9, PC_10};
+const uint8_t UNIVERSAL_MUX_COM   = PB_9;   // input pullup
 
 //
 // PITCHBEND ENABLE SWITCH
 //
-const uint8_t PIN_PB_ENABLE_SW = PC13;
+const uint8_t PIN_PB_ENABLE_SW = PC_13;
 
 //
 // STATUS LED
 //
-const uint8_t STATUS_LED_PIN = PC14;
+const uint8_t STATUS_LED_PIN = PC_14;
 
 //
 // ENCODER (A/B/SW)
 //
-const uint8_t PIN_ENCODER_A = PA9;
-const uint8_t PIN_ENCODER_B = PA10;
-const uint8_t PIN_ENCODER_SW = PA11;
+const uint8_t PIN_ENCODER_A = PA_9;
+const uint8_t PIN_ENCODER_B = PA_10;
+const uint8_t PIN_ENCODER_SW = PA_11;
 
 //
 // TEMPO SWITCHES
 //
-const uint8_t PIN_TEMPO_ENABLE_SW = PC15;
-const uint8_t PIN_TEMPO_MODE_SW   = PB15;  // note: PB15 is also used as COL_PINS[7] in this mapping. If conflict arises, remap COL_PINS[7] to another free pin.
+const uint8_t PIN_TEMPO_ENABLE_SW = PC_15;
+const uint8_t PIN_TEMPO_MODE_SW   = PB_15;  // NOTE: PB_15 is also used as COL_PINS[7] in this mapping (see warning below)
 
 //
 // VELOCITY controls (ADDED)
 //
-const uint8_t VELOCITY_POT = PC0;        // analog pot to set velocity level when enabled
-const uint8_t VELOCITY_TOGGLE_PIN = PC1; // digital button (INPUT_PULLUP) to toggle velocity on/off
+const uint8_t VELOCITY_POT = PC_0;        // analog pot to set velocity level when enabled
+const uint8_t VELOCITY_TOGGLE_PIN = PC_1; // digital button (INPUT_PULLUP) to toggle velocity on/off
 
 //
 // OTHER CONSTANTS
