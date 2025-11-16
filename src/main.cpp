@@ -1,197 +1,137 @@
 #include <Arduino.h>
+#include <USBComposite.h>
+#include <USBMIDI.h>
 #include <MIDI.h>
 
-// =======================
-//   USB MIDI INSTANCE
-// =======================
-MIDI_CREATE_DEFAULT_INSTANCE();
+// =========================
+// USB MIDI
+// =========================
+USBMIDI usbMIDI;
+MIDI_CREATE_INSTANCE(USBMIDI, usbMIDI, MIDI_USB);
 
-// =======================
-//   CONFIG
-// =======================
+// =========================
+// UART MIDI (STM32 <-> ESP32)
+// =========================
+// Catatan penting: Pada STM32 Arduino core,
+// USART1 = Serial2  (INI YANG DIPAKAI)
+HardwareSerial &SerialMIDI_HW = Serial2;
 
-// Matrix 8x8 (61 key)
-const uint8_t rowPins[8] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
-const uint8_t colPins[8] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15};
+// =========================
+// CD4067 MUX
+// =========================
+// Pin Selector S0-S3
+const uint8_t MUX_S0 = PA0;
+const uint8_t MUX_S1 = PA1;
+const uint8_t MUX_S2 = PA2;
+const uint8_t MUX_S3 = PA3;
 
-bool keyState[8][8];
-bool lastKeyState[8][8];
+// Analog input MUX
+const uint8_t MUX_SIGNAL = PA4;
 
-// =======================
-//  Velocity Toggle
-// =======================
-bool velocityOn = true;
-uint8_t fixedVelocity = 100;
-const uint8_t velocityTogglePin = PB8;
+// =========================
+// Velocity Control
+// =========================
+const uint8_t VELOCITY_POT = PA5;          // analog pot
+const uint8_t VELOCITY_TOGGLE_PIN = PA6;   // ON/OFF button
 
-// =======================
-//  Joystick (Pitch / Mod)
-// =======================
-const uint8_t joyX = PA8;
-const uint8_t joyY = PA9;
+bool velocityEnabled = true;
+uint8_t globalVelocity = 100;
 
-// =======================
-//  Two Pots
-// =======================
-const uint8_t potMasterVol = PA10;
-const uint8_t potBalance = PA11;
+// =========================
+// MATRIX KEYS (contoh)
+// =========================
+const uint8_t ROWS = 8;
+const uint8_t COLS = 8;
 
-// =======================
-//  8 Fader
-// =======================
-const uint8_t faderPins[8] = {
-  PA12, PA15, PB3, PB4, PB5, PB6, PB7, PA13
-};
+uint8_t rowPins[ROWS] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15};
+uint8_t colPins[COLS] = {PA7, PA8, PA9, PA10, PA11, PA12, PA15, PB3};
 
-int lastFader[8];
-
-// =======================
-//  CD74HC4067 Analog Multiplexer
-// =======================
-const uint8_t cdS0 = PB9;
-const uint8_t cdS1 = PA14;
-const uint8_t cdS2 = PA0;
-const uint8_t cdS3 = PA1;
-const uint8_t cdSIG = PA12; // analog input
-
-int lastCD[16];
-
-// =======================
-//  Rotary Encoder
-// =======================
-const uint8_t encA = PB2;
-const uint8_t encB = PB1;
-const uint8_t encSW = PB13;
-
-int encoderMode = 0;   // 0 tempo, 1 octave, 2 transpose, 3 wheel-select
-int tempo = 120;
-int octave = 0;
-int transpose = 0;
-
-int lastA = 0;
-
-// =======================
-//  Helper
-// =======================
-int readCD74HC4067(uint8_t ch) {
-  digitalWrite(cdS0, ch & 1);
-  digitalWrite(cdS1, (ch >> 1) & 1);
-  digitalWrite(cdS2, (ch >> 2) & 1);
-  digitalWrite(cdS3, (ch >> 3) & 1);
-  delayMicroseconds(5);
-  return analogRead(cdSIG);
-}
-
-void scanMatrix() {
-  for (int r = 0; r < 8; r++) {
-    digitalWrite(rowPins[r], LOW);
-    for (int c = 0; c < 8; c++) {
-      bool pressed = !digitalRead(colPins[c]);
-      keyState[r][c] = pressed;
-
-      if (pressed != lastKeyState[r][c]) {
-        int note = (r * 8 + c);
-        if (note <= 60) {
-          if (pressed) {
-            uint8_t vel = velocityOn ? map(analogRead(joyY), 0, 4095, 30, 127) : fixedVelocity;
-            MIDI.sendNoteOn(note + transpose + (octave * 12), vel, 1);
-          } else {
-            MIDI.sendNoteOff(note + transpose + (octave * 12), 0, 1);
-          }
-        }
-        lastKeyState[r][c] = pressed;
-      }
-    }
-    digitalWrite(rowPins[r], HIGH);
-  }
-}
-
-void readFaders() {
-  for (int i = 0; i < 8; i++) {
-    int v = analogRead(faderPins[i]);
-    if (abs(v - lastFader[i]) > 8) {
-      uint8_t value = map(v, 0, 4095, 0, 127);
-      MIDI.sendControlChange(20 + i, value, 1);
-      lastFader[i] = v;
-    }
-  }
-}
-
-void readCDMultiplexer() {
-  for (int ch = 0; ch < 16; ch++) {
-    int v = readCD74HC4067(ch);
-    if (abs(v - lastCD[ch]) > 10) {
-      uint8_t value = map(v, 0, 4095, 0, 127);
-      MIDI.sendControlChange(40 + ch, value, 1);
-      lastCD[ch] = v;
-    }
-  }
-}
-
-void readJoystick() {
-  int x = analogRead(joyX);
-  int y = analogRead(joyY);
-
-  uint16_t pitch = map(x, 0, 4095, 0, 16383);
-  MIDI.sendPitchBend(pitch, 1);
-
-  uint8_t mod = map(y, 0, 4095, 0, 127);
-  MIDI.sendControlChange(1, mod, 1);
-}
-
-void readEncoder() {
-  int a = digitalRead(encA);
-  if (a != lastA) {
-    if (digitalRead(encB) != a) {
-      if (encoderMode == 0) tempo++;
-      if (encoderMode == 1) octave++;
-      if (encoderMode == 2) transpose++;
-    } else {
-      if (encoderMode == 0) tempo--;
-      if (encoderMode == 1) octave--;
-      if (encoderMode == 2) transpose--;
-    }
-  }
-  lastA = a;
-
-  if (!digitalRead(encSW)) {
-    encoderMode++;
-    if (encoderMode > 3) encoderMode = 0;
-    delay(250);
-  }
-}
-
+// =========================
+// Setup
+// =========================
 void setup() {
-  MIDI.begin(MIDI_CHANNEL_OMNI);
 
-  pinMode(velocityTogglePin, INPUT_PULLUP);
+    // UART MIDI (STM32 <-> ESP32)
+    SerialMIDI_HW.begin(115200);
 
-  for (int r = 0; r < 8; r++) {
-    pinMode(rowPins[r], OUTPUT);
-    digitalWrite(rowPins[r], HIGH);
-  }
-  for (int c = 0; c < 8; c++) {
-    pinMode(colPins[c], INPUT_PULLUP);
-  }
+    // USB MIDI
+    USBComposite.clear();
+    MIDI_USB.begin();
+    USBComposite.begin();
 
-  pinMode(cdS0, OUTPUT);
-  pinMode(cdS1, OUTPUT);
-  pinMode(cdS2, OUTPUT);
-  pinMode(cdS3, OUTPUT);
+    // MUX pins
+    pinMode(MUX_S0, OUTPUT);
+    pinMode(MUX_S1, OUTPUT);
+    pinMode(MUX_S2, OUTPUT);
+    pinMode(MUX_S3, OUTPUT);
+    pinMode(MUX_SIGNAL, INPUT_ANALOG);
 
-  pinMode(encA, INPUT_PULLUP);
-  pinMode(encB, INPUT_PULLUP);
-  pinMode(encSW, INPUT_PULLUP);
+    // Velocity
+    pinMode(VELOCITY_TOGGLE_PIN, INPUT_PULLUP);
+
+    // Matrix
+    for (int i = 0; i < ROWS; i++) pinMode(rowPins[i], OUTPUT);
+    for (int i = 0; i < COLS; i++) pinMode(colPins[i], INPUT_PULLUP);
 }
 
+// =========================
+// BACA MUX CD4067
+// =========================
+int readMux(uint8_t ch) {
+    digitalWrite(MUX_S0, (ch & 1) ? HIGH : LOW);
+    digitalWrite(MUX_S1, (ch & 2) ? HIGH : LOW);
+    digitalWrite(MUX_S2, (ch & 4) ? HIGH : LOW);
+    digitalWrite(MUX_S3, (ch & 8) ? HIGH : LOW);
+    delayMicroseconds(5);
+    return analogRead(MUX_SIGNAL);
+}
+
+// =========================
+// LOOP
+// =========================
 void loop() {
-  velocityOn = digitalRead(velocityTogglePin);
 
-  scanMatrix();
-  readFaders();
-  readCDMultiplexer();
-  readJoystick();
-  readEncoder();
+    // ==========================
+    // Velocity Toggle Button
+    // ==========================
+    static bool lastBtn = HIGH;
+    bool btn = digitalRead(VELOCITY_TOGGLE_PIN);
 
-  delay(2);
+    if (btn == LOW && lastBtn == HIGH) {
+        velocityEnabled = !velocityEnabled;
+        delay(200);
+    }
+    lastBtn = btn;
+
+    // ==========================
+    // Baca Velocity Pot
+    // ==========================
+    if (velocityEnabled) {
+        int v = analogRead(VELOCITY_POT);
+        globalVelocity = map(v, 0, 4095, 1, 127);
+    } else {
+        globalVelocity = 100; // default
+    }
+
+    // ==========================
+    // SEND UART TO USB MIDI
+    // ==========================
+    while (SerialMIDI_HW.available()) {
+        uint8_t b = SerialMIDI_HW.read();
+        MIDI_USB.sendRealTime(b);
+    }
+
+    // ==========================
+    // SEND USB MIDI TO UART
+    // (Receive from DAW/Phone)
+    // ==========================
+    if (MIDI_USB.read()) {
+        uint8_t type = MIDI_USB.getType();
+        uint8_t d1 = MIDI_USB.getData1();
+        uint8_t d2 = MIDI_USB.getData2();
+
+        SerialMIDI_HW.write(type);
+        SerialMIDI_HW.write(d1);
+        SerialMIDI_HW.write(d2);
+    }
 }
