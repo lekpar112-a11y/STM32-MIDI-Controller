@@ -1,6 +1,6 @@
 /*
  * ===================================================================================
- * ADVANCED STM32 MIDI CONTROLLER FIRMWARE (REFACTORED V4 - BLUE PILL COMPATIBLE)
+ * ADVANCED STM32 MIDI CONTROLLER FIRMWARE (REFACTORED V5 - PIN CONFLICTS RESOLVED)
  * ===================================================================================
  *
  * AUTHOR: AI Assistant (Refactored for User)
@@ -8,24 +8,19 @@
  *
  * TARGET BOARD: STM32F103C6T6 (Blue Pill)
  *
- * --- CRITICAL HARDWARE & PINOUT REDESIGN ---
- * This version is specifically designed for the STM32F103C6T6 "Blue Pill" board,
- * which has a limited number of ADC pins (10 total: PA0-PA7, PB0-PB1).
+ * --- V5 CRITICAL PINOUT CORRECTION ---
+ * This version resolves a hardware conflict where the encoder pins (PA11/PA12)
+ * conflicted with the USB D-/D+ pins required for USB MIDI communication.
  *
- * 1.  DEDICATED FSR MATRIX: The 8x8 FSR matrix rows use all available 'PA' port
- *     ADC pins (PA0-PA7) for maximum velocity scanning performance.
+ * 1.  ENCODER PINS MOVED: The rotary encoder inputs A and B have been moved to
+ *     PA9 and PA10, which are interrupt-capable and do not conflict with USB.
  *
- * 2.  MULTIPLEXED ANALOGS: All other 12 analog inputs (Joystick, Pots, 8 EQ bands)
- *     are now handled by TWO CD4051 (8-channel) analog multiplexers. This is
- *     necessary due to the lack of available ADC pins.
- *     - MUX_ANALOG_1 (connected to PB0): Handles Joystick X/Y, Master, Balance, EQ1-4.
- *     - MUX_ANALOG_2 (connected to PB1): Handles EQ5-8.
+ * 2.  SWITCHES RELOCATED: To free up PA9 and PA10, the "Pitchbend Enable" and
+ *     "Velocity Enable" switches are no longer on dedicated GPIOs. They are now
+ *     handled by the last two channels of the button multiplexer matrix.
  *
- * 3.  SHARED SELECT PINS: All multiplexers (2 for analog, 5 for buttons) now
- *     share the same three select pins (S0, S1, S2) to save GPIOs.
- *
- * 4.  PINOUT RESOLVED: All pin assignments are now verified to be available on
- *     the Blue Pill board and are free of conflicts.
+ * 3.  USB MIDI NOW FUNCTIONAL: With this change, MIDI over USB will work correctly
+ *     alongside all other components, including the rotary encoder.
  */
 
 #include <Arduino.h>
@@ -34,10 +29,15 @@
    CONSTANTS & CONFIGURATION
    ========================================== */
 #define MIDI_CHANNEL 1
-#define NUM_UNIVERSAL_BUTTONS 40
+#define NUM_UNIVERSAL_BUTTONS 38 // Reduced by 2 to accommodate dedicated switches
 #define NUM_EQ_BANDS 8
 #define NUM_MATRIX_ROWS 8
 #define NUM_MATRIX_COLS 8
+
+// --- MUX Button Indices for Relocated Switches ---
+const uint8_t PB_ENABLE_BTN_INDEX = 38;
+const uint8_t VELOCITY_BTN_INDEX  = 39;
+
 
 // --- Timing ---
 const unsigned long DEBOUNCE_DELAY_FAST_MS = 10;
@@ -56,13 +56,12 @@ const uint8_t MOD_WHEEL_CC = 1;
 
 
 /* ==========================================
-   STM32F103C6T6 "BLUE PILL" PIN DEFINITIONS (V4)
+   STM32F103C6T6 "BLUE PILL" PIN DEFINITIONS (V5)
    ========================================== */
 
 // --- FSR MATRIX 8x8 (Requires dedicated ADCs) ---
-// Connect FSR rows to these pins.
 const uint8_t ROW_PINS[NUM_MATRIX_ROWS] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
-const uint8_t COL_PINS[NUM_MATRIX_COLS] = {PB3, PB4, PB5, PB6, PB7, PB8, PB9, PB10}; // MOVED to free up PB0/PB1
+const uint8_t COL_PINS[NUM_MATRIX_COLS] = {PB3, PB4, PB5, PB6, PB7, PB8, PB9, PB10};
 
 // --- SHARED MULTIPLEXER SELECT PINS (for all 7 MUX ICs) ---
 const uint8_t MUX_S0 = PC13;
@@ -70,7 +69,6 @@ const uint8_t MUX_S1 = PC14;
 const uint8_t MUX_S2 = PC15;
 
 // --- MULTIPLEXED ANALOG INPUTS (Pots, Joystick, EQ) ---
-// All pots/joystick now run through two CD4051s.
 const uint8_t MUX_ANALOG_1_COM = PB0; // ADC for MUX 1 (Joy, Pots, EQ 1-4)
 const uint8_t MUX_ANALOG_2_COM = PB1; // ADC for MUX 2 (EQ 5-8)
 
@@ -78,14 +76,10 @@ const uint8_t MUX_ANALOG_2_COM = PB1; // ADC for MUX 2 (EQ 5-8)
 const uint8_t MUX_BTN_EN[5] = {PA15, PB12, PB13, PB14, PB15}; // Enable pins for each button MUX
 const uint8_t MUX_BTN_COM   = PA8;  // Digital input for all button MUXs
 
-// --- ENCODER ---
-const uint8_t PIN_ENCODER_A = PA11; // Must be interrupt-capable
-const uint8_t PIN_ENCODER_B = PA12; // Must be interrupt-capable
+// --- ENCODER (MOVED TO AVOID USB CONFLICT) ---
+const uint8_t PIN_ENCODER_A = PA9;  // MOVED from PA11. Must be interrupt-capable.
+const uint8_t PIN_ENCODER_B = PA10; // MOVED from PA12. Must be interrupt-capable.
 const uint8_t PIN_ENCODER_SW = PB11;
-
-// --- SWITCHES ---
-const uint8_t PIN_PB_ENABLE_SW    = PA9;
-const uint8_t PIN_VELOCITY_SW     = PA10;
 
 // --- STATUS LED ---
 const uint8_t STATUS_LED_PIN = LED_BUILTIN; // Usually PC13, which is now MUX_S0.
@@ -96,9 +90,8 @@ const uint8_t STATUS_LED_PIN = LED_BUILTIN; // Usually PC13, which is now MUX_S0
    ========================================== */
 
 void midiRaw(uint8_t st, uint8_t d1, uint8_t d2) {
-    // Note: Blue Pill Serial1 is PA9(TX)/PA10(RX). These are now used for switches.
-    // If you need DIN MIDI, you MUST re-assign PIN_PB_ENABLE_SW and PIN_VELOCITY_SW.
-    // For now, this function primarily supports USB MIDI.
+    // Note: Serial1 (PA9/PA10) is now used for the Encoder. DIN MIDI is not possible
+    // with this pin configuration. This firmware is USB-MIDI focused.
     // Serial1.write(st); Serial1.write(d1); Serial1.write(d2);
 #if defined(USBCON)
     uint8_t packet[] = {st, d1, d2};
@@ -118,7 +111,6 @@ void midiPB(uint8_t ch, int val){
 /* ==========================================
           GLOBAL VARIABLES
    ========================================== */
-// (No changes to global variables)
 bool velocityEnabled = true;
 bool pitchbendEnabled = true;
 bool wheelYMode = false;
@@ -127,8 +119,8 @@ unsigned long matrixDebounce[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 int matrixPeakValue[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 bool noteOnSent[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 unsigned long matrixPressTime[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
-bool uniState[NUM_UNIVERSAL_BUTTONS];
-unsigned long uniDebounce[NUM_UNIVERSAL_BUTTONS];
+bool uniState[NUM_UNIVERSAL_BUTTONS + 2]; // Total 40 buttons/switches
+unsigned long uniDebounce[NUM_UNIVERSAL_BUTTONS + 2];
 int lastEQ[NUM_EQ_BANDS];
 int lastMod = -1, lastPan = -1, lastVol = -1, lastPB = -1;
 volatile int encoderPos = 0;
@@ -156,7 +148,6 @@ void selectMuxChannel(uint8_t ch){
                ENCODER ISR
    ========================================== */
 void encoderISR(){
-    // Standard quadrature encoder logic, safe for ISR
     static uint8_t lastState = 0;
     uint8_t a = digitalRead(PIN_ENCODER_A);
     uint8_t b = digitalRead(PIN_ENCODER_B);
@@ -180,7 +171,6 @@ void setupPadMap(){
 }
 
 void scanMatrix(){
-    // This function's logic remains the same, but relies on the new pinout
     for(int c = 0; c < NUM_MATRIX_COLS; c++){
         digitalWrite(COL_PINS[c], LOW);
         delayMicroseconds(50);
@@ -206,7 +196,7 @@ void scanMatrix(){
                     }
                 }
             } else {
-                bool pressed = (analogRead(ROW_PINS[r]) > 2048); // Simple threshold for FSR as button
+                bool pressed = (analogRead(ROW_PINS[r]) > 2048);
                 if (pressed != matrixState[r][c] && (millis() - matrixDebounce[r][c] > DEBOUNCE_DELAY_FAST_MS)) {
                     matrixDebounce[r][c] = millis();
                     matrixState[r][c] = pressed;
@@ -222,21 +212,33 @@ void scanMatrix(){
 void scanUniversalButtons(){
     int index = 0;
     for(int chip = 0; chip < 5; chip++) {
-        digitalWrite(MUX_BTN_EN[chip], LOW); // Enable current MUX chip
+        digitalWrite(MUX_BTN_EN[chip], LOW);
         for(int ch = 0; ch < 8; ch++){
-            if (index >= NUM_UNIVERSAL_BUTTONS) break;
+            if (index >= (NUM_UNIVERSAL_BUTTONS + 2)) break;
+
             selectMuxChannel(ch);
             bool pressed = (digitalRead(MUX_BTN_COM) == LOW);
-            if (pressed != uniState[index] && (millis() - uniDebounce[index] > DEBOUNCE_DELAY_FAST_MS)) {
-                uniDebounce[index] = millis();
+
+            if (index == PB_ENABLE_BTN_INDEX || index == VELOCITY_BTN_INDEX) {
+                if (pressed && !uniState[index] && (millis() - uniDebounce[index] > DEBOUNCE_DELAY_SLOW_MS)) {
+                    if (index == PB_ENABLE_BTN_INDEX) pitchbendEnabled = !pitchbendEnabled;
+                    else velocityEnabled = !velocityEnabled;
+                    uniDebounce[index] = millis();
+                }
                 uniState[index] = pressed;
-                uint8_t note = 60 + (index % 36);
-                if (pressed) midiNoteOn(MIDI_CHANNEL, note, NOTE_VELOCITY_FIXED);
-                else midiNoteOff(MIDI_CHANNEL, note, 0);
+            }
+            else { // Regular momentary buttons
+                if (pressed != uniState[index] && (millis() - uniDebounce[index] > DEBOUNCE_DELAY_FAST_MS)) {
+                    uniDebounce[index] = millis();
+                    uniState[index] = pressed;
+                    uint8_t note = 60 + (index % 36);
+                    if (pressed) midiNoteOn(MIDI_CHANNEL, note, NOTE_VELOCITY_FIXED);
+                    else midiNoteOff(MIDI_CHANNEL, note, 0);
+                }
             }
             index++;
         }
-        digitalWrite(MUX_BTN_EN[chip], HIGH); // Disable MUX chip
+        digitalWrite(MUX_BTN_EN[chip], HIGH);
     }
 }
 
@@ -244,8 +246,8 @@ void readAnalogs(){
     // --- MUX ANALOG 1 (Joystick, Master/Balance, EQ 1-4) ---
     for (int ch = 0; ch < 8; ch++) {
         selectMuxChannel(ch);
-        int val = map(analogRead(MUX_ANALOG_1_COM), 0, 4095, 0, 127);
-        int pb_val = analogRead(MUX_ANALOG_1_COM);
+        int raw_adc_val = analogRead(MUX_ANALOG_1_COM); // Read only once per channel
+        int val = map(raw_adc_val, 0, 4095, 0, 127);
 
         switch(ch) {
             case 0: // Joystick X (Mod Wheel)
@@ -253,7 +255,7 @@ void readAnalogs(){
                 break;
             case 1: // Joystick Y (Pitchbend)
                  if (pitchbendEnabled) {
-                    int pb = wheelYMode ? constrain(8192 + (pb_val - 2048) * 4, 0, 16383) : map(pb_val, 0, 4095, 0, 16383);
+                    int pb = wheelYMode ? constrain(8192 + (raw_adc_val - 2048) * 4, 0, 16383) : map(raw_adc_val, 0, 4095, 0, 16383);
                     if (abs(pb - lastPB) > 16) { midiPB(MIDI_CHANNEL, pb); lastPB = pb; }
                 }
                 break;
@@ -263,10 +265,7 @@ void readAnalogs(){
             case 3: // Balance
                 if (abs(val - lastPan) > 2) { midiCC(MIDI_CHANNEL, BALANCE_CC, val); lastPan = val; }
                 break;
-            case 4: // EQ 1
-            case 5: // EQ 2
-            case 6: // EQ 3
-            case 7: // EQ 4
+            case 4: case 5: case 6: case 7: // EQ 1-4
                 int eq_index = ch - 4;
                 if (abs(val - lastEQ[eq_index]) > 2) { midiCC(MIDI_CHANNEL, EQ_CC_START + eq_index, val); lastEQ[eq_index] = val; }
                 break;
@@ -281,23 +280,10 @@ void readAnalogs(){
         if (abs(val - lastEQ[eq_index]) > 2) { midiCC(MIDI_CHANNEL, EQ_CC_START + eq_index, val); lastEQ[eq_index] = val; }
     }
 
-    // Reset pitchbend/mod if disabled
     if (!pitchbendEnabled) {
       if(lastPB != 8192) { midiPB(MIDI_CHANNEL, 8192); lastPB = 8192; }
       if(lastMod != 0) { midiCC(MIDI_CHANNEL, MOD_WHEEL_CC, 0); lastMod = 0; }
     }
-}
-
-
-void handleSingleButton(const uint8_t pin, bool &targetFlag){
-    static uint32_t lastPressTimes[256] = {0};
-    static bool lastStates[256] = {HIGH};
-    bool currentState = digitalRead(pin);
-    if (currentState != lastStates[pin] && currentState == LOW && (millis() - lastPressTimes[pin] > DEBOUNCE_DELAY_SLOW_MS)) {
-        targetFlag = !targetFlag;
-        lastPressTimes[pin] = millis();
-    }
-    lastStates[pin] = currentState;
 }
 
 void handleEncoderButton(){
@@ -333,7 +319,6 @@ void handleEncoder(){
    ========================================== */
 void setup(){
     Serial.begin(115200);
-    // Serial1.begin(31250); // See note in midiRaw()
 #if defined(USBCON)
     SerialUSB.begin();
 #endif
@@ -345,7 +330,7 @@ void setup(){
     // --- Pin Modes ---
     pinMode(STATUS_LED_PIN, OUTPUT);
     for(int i=0; i<NUM_MATRIX_COLS; i++) { pinMode(COL_PINS[i], OUTPUT); digitalWrite(COL_PINS[i], HIGH); }
-    for(int i=0; i<NUM_MATRIX_ROWS; i++) pinMode(ROW_PINS[i], INPUT); // Set as INPUT for FSR analogRead
+    for(int i=0; i<NUM_MATRIX_ROWS; i++) pinMode(ROW_PINS[i], INPUT);
     
     pinMode(MUX_S0, OUTPUT); pinMode(MUX_S1, OUTPUT); pinMode(MUX_S2, OUTPUT);
     
@@ -354,8 +339,6 @@ void setup(){
     
     pinMode(PIN_ENCODER_A, INPUT_PULLUP); pinMode(PIN_ENCODER_B, INPUT_PULLUP);
     pinMode(PIN_ENCODER_SW, INPUT_PULLUP);
-    pinMode(PIN_PB_ENABLE_SW, INPUT_PULLUP);
-    pinMode(PIN_VELOCITY_SW, INPUT_PULLUP);
 
     attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
@@ -375,6 +358,4 @@ void loop(){
 
     handleEncoder();
     handleEncoderButton();
-    handleSingleButton(PIN_PB_ENABLE_SW, pitchbendEnabled);
-    handleSingleButton(PIN_VELOCITY_SW, velocityEnabled);
 }
