@@ -1,137 +1,140 @@
 #include <Arduino.h>
-#include <USBComposite.h>
-#include <USBMIDI.h>
 #include <MIDI.h>
 
-// =========================
-// USB MIDI
-// =========================
-USBMIDI usbMIDI;
-MIDI_CREATE_INSTANCE(USBMIDI, usbMIDI, MIDI_USB);
+MIDI_CREATE_DEFAULT_INSTANCE();
 
-// =========================
-// UART MIDI (STM32 <-> ESP32)
-// =========================
-// Catatan penting: Pada STM32 Arduino core,
-// USART1 = Serial2  (INI YANG DIPAKAI)
-HardwareSerial &SerialMIDI_HW = Serial2;
+// =======================
+// CD74HC4067 MULTIPLEXER
+// =======================
+#define MUX_SIG_PIN PA0   // Output multiplexer ke ADC STM32
 
-// =========================
-// CD4067 MUX
-// =========================
-// Pin Selector S0-S3
-const uint8_t MUX_S0 = PA0;
-const uint8_t MUX_S1 = PA1;
-const uint8_t MUX_S2 = PA2;
-const uint8_t MUX_S3 = PA3;
+// S0–S3 multiplexer
+#define MUX_S0 PB12
+#define MUX_S1 PB13
+#define MUX_S2 PB14
+#define MUX_S3 PB15
 
-// Analog input MUX
-const uint8_t MUX_SIGNAL = PA4;
+// Total 16 channel
+int analogValues[16];
 
-// =========================
-// Velocity Control
-// =========================
-const uint8_t VELOCITY_POT = PA5;          // analog pot
-const uint8_t VELOCITY_TOGGLE_PIN = PA6;   // ON/OFF button
+// =======================
+// DIGITAL BUTTONS
+// =======================
+// 16 tombol digital (bebas kamu ganti)
+uint8_t buttonPins[16] = {
+    PA1, PA2, PA3, PA4,
+    PA5, PA6, PA7, PB0,
+    PB1, PB3, PB4, PB5,
+    PB6, PB7, PB8, PB9
+};
 
-bool velocityEnabled = true;
-uint8_t globalVelocity = 100;
+bool buttonState[16];
+bool lastButtonState[16];
 
-// =========================
-// MATRIX KEYS (contoh)
-// =========================
-const uint8_t ROWS = 8;
-const uint8_t COLS = 8;
+// =======================
+// MIDI CONFIG
+// =======================
+#define UART_MIDI Serial1
+uint8_t ccBase = 20;        // CC mulai dari CC20
+uint8_t noteBase = 36;      // Note mulai dari C2
 
-uint8_t rowPins[ROWS] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15};
-uint8_t colPins[COLS] = {PA7, PA8, PA9, PA10, PA11, PA12, PA15, PB3};
-
-// =========================
-// Setup
-// =========================
+// =======================
+// SETUP
+// =======================
 void setup() {
-
-    // UART MIDI (STM32 <-> ESP32)
-    SerialMIDI_HW.begin(115200);
-
     // USB MIDI
-    USBComposite.clear();
-    MIDI_USB.begin();
-    USBComposite.begin();
+    MIDI.begin(MIDI_CHANNEL_OMNI);
 
-    // MUX pins
+    // UART MIDI
+    UART_MIDI.begin(115200);
+
+    // Pins multiplexer
     pinMode(MUX_S0, OUTPUT);
     pinMode(MUX_S1, OUTPUT);
     pinMode(MUX_S2, OUTPUT);
     pinMode(MUX_S3, OUTPUT);
-    pinMode(MUX_SIGNAL, INPUT_ANALOG);
 
-    // Velocity
-    pinMode(VELOCITY_TOGGLE_PIN, INPUT_PULLUP);
+    // Button pins
+    for (int i = 0; i < 16; i++) {
+        pinMode(buttonPins[i], INPUT_PULLUP);
+        lastButtonState[i] = HIGH;
+    }
 
-    // Matrix
-    for (int i = 0; i < ROWS; i++) pinMode(rowPins[i], OUTPUT);
-    for (int i = 0; i < COLS; i++) pinMode(colPins[i], INPUT_PULLUP);
+    // ADC multiplexer signal
+    pinMode(MUX_SIG_PIN, INPUT_ANALOG);
 }
 
-// =========================
-// BACA MUX CD4067
-// =========================
-int readMux(uint8_t ch) {
-    digitalWrite(MUX_S0, (ch & 1) ? HIGH : LOW);
-    digitalWrite(MUX_S1, (ch & 2) ? HIGH : LOW);
-    digitalWrite(MUX_S2, (ch & 4) ? HIGH : LOW);
-    digitalWrite(MUX_S3, (ch & 8) ? HIGH : LOW);
+// =======================
+// READ MULTIPLEXER
+// =======================
+int readMux(uint8_t channel) {
+    digitalWrite(MUX_S0, channel & 1);
+    digitalWrite(MUX_S1, channel & 2);
+    digitalWrite(MUX_S2, channel & 4);
+    digitalWrite(MUX_S3, channel & 8);
+
     delayMicroseconds(5);
-    return analogRead(MUX_SIGNAL);
+    return analogRead(MUX_SIG_PIN);
 }
 
-// =========================
-// LOOP
-// =========================
+// =======================
+// MAIN LOOP
+// =======================
 void loop() {
 
-    // ==========================
-    // Velocity Toggle Button
-    // ==========================
-    static bool lastBtn = HIGH;
-    bool btn = digitalRead(VELOCITY_TOGGLE_PIN);
+    // ======================
+    // ANALOG MULTIPLEXER
+    // ======================
+    for (uint8_t ch = 0; ch < 16; ch++) {
+        int val = readMux(ch);
+        int midiVal = map(val, 0, 4095, 0, 127);
 
-    if (btn == LOW && lastBtn == HIGH) {
-        velocityEnabled = !velocityEnabled;
-        delay(200);
-    }
-    lastBtn = btn;
-
-    // ==========================
-    // Baca Velocity Pot
-    // ==========================
-    if (velocityEnabled) {
-        int v = analogRead(VELOCITY_POT);
-        globalVelocity = map(v, 0, 4095, 1, 127);
-    } else {
-        globalVelocity = 100; // default
+        if (abs(midiVal - analogValues[ch]) > 2) {  // Threshold
+            analogValues[ch] = midiVal;
+            MIDI.sendControlChange(ccBase + ch, midiVal, 1);
+        }
     }
 
-    // ==========================
-    // SEND UART TO USB MIDI
-    // ==========================
-    while (SerialMIDI_HW.available()) {
-        uint8_t b = SerialMIDI_HW.read();
-        MIDI_USB.sendRealTime(b);
+    // ======================
+    // DIGITAL BUTTONS
+    // ======================
+    for (uint8_t i = 0; i < 16; i++) {
+        bool reading = digitalRead(buttonPins[i]);
+
+        if (reading != lastButtonState[i]) {
+            delay(5); // debounce
+            reading = digitalRead(buttonPins[i]);
+        }
+
+        if (reading != buttonState[i]) {
+            buttonState[i] = reading;
+
+            if (reading == LOW) {
+                MIDI.sendNoteOn(noteBase + i, 100, 1);
+            } else {
+                MIDI.sendNoteOff(noteBase + i, 0, 1);
+            }
+        }
+
+        lastButtonState[i] = reading;
     }
 
-    // ==========================
-    // SEND USB MIDI TO UART
-    // (Receive from DAW/Phone)
-    // ==========================
-    if (MIDI_USB.read()) {
-        uint8_t type = MIDI_USB.getType();
-        uint8_t d1 = MIDI_USB.getData1();
-        uint8_t d2 = MIDI_USB.getData2();
+    // ======================
+    // USB MIDI → UART MIDI
+    // ======================
+    if (MIDI.read()) {
+        UART_MIDI.write(MIDI.getType());
+        UART_MIDI.write(MIDI.getData1());
+        UART_MIDI.write(MIDI.getData2());
+    }
 
-        SerialMIDI_HW.write(type);
-        SerialMIDI_HW.write(d1);
-        SerialMIDI_HW.write(d2);
+    // ======================
+    // UART MIDI → USB MIDI
+    // ======================
+    if (UART_MIDI.available() >= 3) {
+        byte cmd = UART_MIDI.read();
+        byte d1 = UART_MIDI.read();
+        byte d2 = UART_MIDI.read();
+        MIDI.send(cmd, d1, d2, 1);
     }
 }
