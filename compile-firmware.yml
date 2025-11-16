@@ -1,0 +1,50 @@
+name: Compile STM32 Firmware
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Langkah 1: Mengambil kode dari repositori Anda
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Langkah 2: Mengekstrak kode Arduino dari App.tsx ke dalam file .ino
+    # Script ini secara cerdas menemukan blok kode firmware dan menyimpannya.
+    - name: Extract Arduino code from App.tsx
+      run: |
+        mkdir -p firmware_build
+        sed -n '/ADVANCED STM32 MIDI CONTROLLER FIRMWARE/,/`;/p' App.tsx | head -n -1 > firmware_build/firmware_build.ino
+        echo "Berhasil mengekstrak kode firmware."
+
+    # Langkah 3: Meng-compile sketch menggunakan Arduino Compile Action
+    - name: Compile Arduino Sketch
+      uses: arduino/compile-sketches@v1
+      with:
+        # Menentukan path ke file .ino yang baru saja kita buat
+        sketch-path: ./firmware_build
+
+        # FQBN (Fully Qualified Board Name) untuk STM32 Blue Pill
+        # PENTING: FQBN ini adalah contoh umum. Anda mungkin perlu menyesuaikannya
+        # tergantung pada versi STM32 Core yang Anda gunakan.
+        fqbn: STM32:stm32:GenF1:pnum=BLUEPILL_F103C8,upload_method=serialMethod,xserial=generic,usb=none,xusb=FS,opt=osstd,rtlib=nano
+
+        # Secara otomatis menginstal platform board STM32
+        platforms: |
+          - name: STM32
+            source-url: https://github.com/stm32duino/BoardManagerFiles/raw/main/package_stm32duino_index.json
+
+    # Langkah 4 (Opsional): Menyimpan hasil compile sebagai artifact
+    # Anda bisa mengunduh file .bin/.hex dari halaman Actions di GitHub.
+    - name: Upload Artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: compiled-firmware
+        path: ./firmware_build/build/
