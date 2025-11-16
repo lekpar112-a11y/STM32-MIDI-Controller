@@ -1,204 +1,197 @@
 #include <Arduino.h>
-#include <USBMIDI.h>
+#include <MIDI.h>
 
-USBMIDI MIDI;
+// =======================
+//   USB MIDI INSTANCE
+// =======================
+MIDI_CREATE_DEFAULT_INSTANCE();
 
-// ==========================
-// MATRIX 8×8 (64 keys)
-// ==========================
-const uint8_t ROWS[8] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
-const uint8_t COLS[8] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15};
+// =======================
+//   CONFIG
+// =======================
 
-// State key
-uint8_t keyState[8][8];
+// Matrix 8x8 (61 key)
+const uint8_t rowPins[8] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
+const uint8_t colPins[8] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15};
 
-// ==========================
-// MULTIPLEXER CD74HC4067
-// ==========================
-const uint8_t MUX_S0 = PB8;
-const uint8_t MUX_S1 = PB9;
-const uint8_t MUX_S2 = PA8;
-const uint8_t MUX_S3 = PA9;
-const uint8_t MUX_EN = PA10;   // EN LOW = aktif
-const uint8_t MUX_SIG = PA11;  // Output ADC
+bool keyState[8][8];
+bool lastKeyState[8][8];
 
-// Input channel multiplexer
-enum {
-  CH_FADER_1, CH_FADER_2, CH_FADER_3, CH_FADER_4,
-  CH_FADER_5, CH_FADER_6, CH_FADER_7, CH_FADER_8,
-  CH_VELOCITY_POT,
-  CH_JOYSTICK_X,
-  CH_JOYSTICK_Y,
-  CH_UNUSED_11,
-  CH_UNUSED_12,
-  CH_UNUSED_13,
-  CH_UNUSED_14,
-  CH_UNUSED_15
+// =======================
+//  Velocity Toggle
+// =======================
+bool velocityOn = true;
+uint8_t fixedVelocity = 100;
+const uint8_t velocityTogglePin = PB8;
+
+// =======================
+//  Joystick (Pitch / Mod)
+// =======================
+const uint8_t joyX = PA8;
+const uint8_t joyY = PA9;
+
+// =======================
+//  Two Pots
+// =======================
+const uint8_t potMasterVol = PA10;
+const uint8_t potBalance = PA11;
+
+// =======================
+//  8 Fader
+// =======================
+const uint8_t faderPins[8] = {
+  PA12, PA15, PB3, PB4, PB5, PB6, PB7, PA13
 };
 
-// ==========================
-// DIRECT ADC (NO MUX)
-// ==========================
-const uint8_t POT_VOLUME  = PA15;
-const uint8_t POT_BALANCE = PB4;
+int lastFader[8];
 
-// ==========================
-// BUTTONS
-// ==========================
-const uint8_t PIN_OCTAVE_UP   = PB5;
-const uint8_t PIN_OCTAVE_DOWN = PB6;
-const uint8_t PIN_TRANSPOSE_UP   = PB7;
-const uint8_t PIN_TRANSPOSE_DOWN = PB3;
+// =======================
+//  CD74HC4067 Analog Multiplexer
+// =======================
+const uint8_t cdS0 = PB9;
+const uint8_t cdS1 = PA14;
+const uint8_t cdS2 = PA0;
+const uint8_t cdS3 = PA1;
+const uint8_t cdSIG = PA12; // analog input
 
-const uint8_t PIN_WHEEL_MODE = PA12;      // Toggle joystick → pitchbend / modwheel
-const uint8_t PIN_VELOCITY_ONOFF = PA13;  // Velocity ON/OFF
+int lastCD[16];
 
-const uint8_t PIN_TEMPO_MODE = PA14;      // Change tempo parameter mode
+// =======================
+//  Rotary Encoder
+// =======================
+const uint8_t encA = PB2;
+const uint8_t encB = PB1;
+const uint8_t encSW = PB13;
 
-// ==========================
-// ENCODER (TEMPO / MENU)
-// ==========================
-const uint8_t ENC_A = PB2;
-const uint8_t ENC_B = PB10;
-const uint8_t ENC_SW = PB1;
-
-int lastEnc = 0;
-
-// ==========================
-// GLOBAL PARAMETERS
-// ==========================
-bool velocityEnabled = true;
-uint8_t velocityValue = 100;
-
-int octaveShift = 0;
+int encoderMode = 0;   // 0 tempo, 1 octave, 2 transpose, 3 wheel-select
+int tempo = 120;
+int octave = 0;
 int transpose = 0;
 
-bool wheelPitchMode = true; // true = pitchbend, false = modulation
+int lastA = 0;
 
-uint16_t tempoBPM = 120;
-
-// ==========================
-// READ MUX
-// ==========================
-int readMux(uint8_t ch) {
-  digitalWrite(MUX_S0, (ch & 1) ? HIGH : LOW);
-  digitalWrite(MUX_S1, (ch & 2) ? HIGH : LOW);
-  digitalWrite(MUX_S2, (ch & 4) ? HIGH : LOW);
-  digitalWrite(MUX_S3, (ch & 8) ? HIGH : LOW);
-  digitalWrite(MUX_EN, LOW);
-  delayMicroseconds(4);
-  return analogRead(MUX_SIG);
+// =======================
+//  Helper
+// =======================
+int readCD74HC4067(uint8_t ch) {
+  digitalWrite(cdS0, ch & 1);
+  digitalWrite(cdS1, (ch >> 1) & 1);
+  digitalWrite(cdS2, (ch >> 2) & 1);
+  digitalWrite(cdS3, (ch >> 3) & 1);
+  delayMicroseconds(5);
+  return analogRead(cdSIG);
 }
 
-// ==========================
-// SETUP
-// ==========================
-void setup() {
-  // MATRIX
-  for (int i = 0; i < 8; i++) {
-    pinMode(ROWS[i], OUTPUT);
-    pinMode(COLS[i], INPUT_PULLUP);
-  }
-
-  // MUX
-  pinMode(MUX_S0, OUTPUT);
-  pinMode(MUX_S1, OUTPUT);
-  pinMode(MUX_S2, OUTPUT);
-  pinMode(MUX_S3, OUTPUT);
-  pinMode(MUX_EN, OUTPUT);
-  pinMode(MUX_SIG, INPUT_ANALOG);
-
-  // DIRECT ADC
-  pinMode(POT_VOLUME, INPUT_ANALOG);
-  pinMode(POT_BALANCE, INPUT_ANALOG);
-
-  // BUTTONS
-  pinMode(PIN_OCTAVE_UP, INPUT_PULLUP);
-  pinMode(PIN_OCTAVE_DOWN, INPUT_PULLUP);
-  pinMode(PIN_TRANSPOSE_UP, INPUT_PULLUP);
-  pinMode(PIN_TRANSPOSE_DOWN, INPUT_PULLUP);
-  pinMode(PIN_WHEEL_MODE, INPUT_PULLUP);
-  pinMode(PIN_VELOCITY_ONOFF, INPUT_PULLUP);
-  pinMode(PIN_TEMPO_MODE, INPUT_PULLUP);
-
-  // ENCODER
-  pinMode(ENC_A, INPUT_PULLUP);
-  pinMode(ENC_B, INPUT_PULLUP);
-  pinMode(ENC_SW, INPUT_PULLUP);
-
-  MIDI.begin();
-}
-
-// ==========================
-// MATRIX SCAN
-// ==========================
-void scanKeys() {
+void scanMatrix() {
   for (int r = 0; r < 8; r++) {
-    digitalWrite(ROWS[r], LOW);
+    digitalWrite(rowPins[r], LOW);
     for (int c = 0; c < 8; c++) {
-      bool pressed = (digitalRead(COLS[c]) == LOW);
-      if (pressed && keyState[r][c] == 0) {
-        int note = r * 8 + c + 36 + transpose + (octaveShift * 12);
-        MIDI.sendNoteOn(note, velocityEnabled ? velocityValue : 100, 1);
-        keyState[r][c] = 1;
-      } else if (!pressed && keyState[r][c] == 1) {
-        int note = r * 8 + c + 36 + transpose + (octaveShift * 12);
-        MIDI.sendNoteOff(note, 0, 1);
-        keyState[r][c] = 0;
+      bool pressed = !digitalRead(colPins[c]);
+      keyState[r][c] = pressed;
+
+      if (pressed != lastKeyState[r][c]) {
+        int note = (r * 8 + c);
+        if (note <= 60) {
+          if (pressed) {
+            uint8_t vel = velocityOn ? map(analogRead(joyY), 0, 4095, 30, 127) : fixedVelocity;
+            MIDI.sendNoteOn(note + transpose + (octave * 12), vel, 1);
+          } else {
+            MIDI.sendNoteOff(note + transpose + (octave * 12), 0, 1);
+          }
+        }
+        lastKeyState[r][c] = pressed;
       }
     }
-    digitalWrite(ROWS[r], HIGH);
+    digitalWrite(rowPins[r], HIGH);
   }
 }
 
-// ==========================
-// LOOP
-// ==========================
-void loop() {
-
-  // ===== MATRIX =====
-  scanKeys();
-
-  // ===== BUTTON EVENTS =====
-  if (!digitalRead(PIN_OCTAVE_UP))     octaveShift++;
-  if (!digitalRead(PIN_OCTAVE_DOWN))   octaveShift--;
-  if (!digitalRead(PIN_TRANSPOSE_UP))  transpose++;
-  if (!digitalRead(PIN_TRANSPOSE_DOWN)) transpose--;
-
-  if (!digitalRead(PIN_WHEEL_MODE))
-    wheelPitchMode = !wheelPitchMode;
-
-  if (!digitalRead(PIN_VELOCITY_ONOFF))
-    velocityEnabled = !velocityEnabled;
-
-  // ===== VELOCITY POT =====
-  velocityValue = map(readMux(CH_VELOCITY_POT), 0, 4095, 1, 127);
-
-  // ===== JOYSTICK =====
-  int joyX = readMux(CH_JOYSTICK_X);
-  int joyY = readMux(CH_JOYSTICK_Y);
-
-  if (wheelPitchMode) {
-    int bend = map(joyX, 0, 4095, -8192, 8191);
-    MIDI.sendPitchBend(bend, 1);
-  } else {
-    int modwheel = map(joyY, 0, 4095, 0, 127);
-    MIDI.sendControlChange(1, modwheel, 1);
-  }
-
-  // ===== FADER 8 =====
+void readFaders() {
   for (int i = 0; i < 8; i++) {
-    int val = readMux(i);
-    val = map(val, 0, 4095, 0, 127);
-    MIDI.sendControlChange(20 + i, val, 1);
+    int v = analogRead(faderPins[i]);
+    if (abs(v - lastFader[i]) > 8) {
+      uint8_t value = map(v, 0, 4095, 0, 127);
+      MIDI.sendControlChange(20 + i, value, 1);
+      lastFader[i] = v;
+    }
+  }
+}
+
+void readCDMultiplexer() {
+  for (int ch = 0; ch < 16; ch++) {
+    int v = readCD74HC4067(ch);
+    if (abs(v - lastCD[ch]) > 10) {
+      uint8_t value = map(v, 0, 4095, 0, 127);
+      MIDI.sendControlChange(40 + ch, value, 1);
+      lastCD[ch] = v;
+    }
+  }
+}
+
+void readJoystick() {
+  int x = analogRead(joyX);
+  int y = analogRead(joyY);
+
+  uint16_t pitch = map(x, 0, 4095, 0, 16383);
+  MIDI.sendPitchBend(pitch, 1);
+
+  uint8_t mod = map(y, 0, 4095, 0, 127);
+  MIDI.sendControlChange(1, mod, 1);
+}
+
+void readEncoder() {
+  int a = digitalRead(encA);
+  if (a != lastA) {
+    if (digitalRead(encB) != a) {
+      if (encoderMode == 0) tempo++;
+      if (encoderMode == 1) octave++;
+      if (encoderMode == 2) transpose++;
+    } else {
+      if (encoderMode == 0) tempo--;
+      if (encoderMode == 1) octave--;
+      if (encoderMode == 2) transpose--;
+    }
+  }
+  lastA = a;
+
+  if (!digitalRead(encSW)) {
+    encoderMode++;
+    if (encoderMode > 3) encoderMode = 0;
+    delay(250);
+  }
+}
+
+void setup() {
+  MIDI.begin(MIDI_CHANNEL_OMNI);
+
+  pinMode(velocityTogglePin, INPUT_PULLUP);
+
+  for (int r = 0; r < 8; r++) {
+    pinMode(rowPins[r], OUTPUT);
+    digitalWrite(rowPins[r], HIGH);
+  }
+  for (int c = 0; c < 8; c++) {
+    pinMode(colPins[c], INPUT_PULLUP);
   }
 
-  // ===== MASTER & BALANCE =====
-  int vol = map(analogRead(POT_VOLUME), 0, 4095, 0, 127);
-  int bal = map(analogRead(POT_BALANCE), 0, 4095, 0, 127);
+  pinMode(cdS0, OUTPUT);
+  pinMode(cdS1, OUTPUT);
+  pinMode(cdS2, OUTPUT);
+  pinMode(cdS3, OUTPUT);
 
-  MIDI.sendControlChange(7, vol, 1);
-  MIDI.sendControlChange(10, bal, 1);
+  pinMode(encA, INPUT_PULLUP);
+  pinMode(encB, INPUT_PULLUP);
+  pinMode(encSW, INPUT_PULLUP);
+}
 
-  delay(3);
+void loop() {
+  velocityOn = digitalRead(velocityTogglePin);
+
+  scanMatrix();
+  readFaders();
+  readCDMultiplexer();
+  readJoystick();
+  readEncoder();
+
+  delay(2);
 }
