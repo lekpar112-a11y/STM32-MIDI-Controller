@@ -155,7 +155,7 @@ void selectMuxChannel(uint8_t ch){
 /* ==========================================
                ENCODER ISR
    ========================================== */
-void IRAM_ATTR encoderISR(){
+void encoderISR(){
     // Standard quadrature encoder logic, safe for ISR
     static uint8_t lastState = 0;
     uint8_t a = digitalRead(PIN_ENCODER_A);
