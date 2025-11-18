@@ -1,112 +1,128 @@
 /*
  * ===================================================================================
- * ADVANCED STM32 MIDI CONTROLLER FIRMWARE (REFACTORED V5 - PIN CONFLICTS RESOLVED)
+ * STM32 STANDALONE USB MIDI CONTROLLER FIRMWARE (V10 - USB NATIVE)
  * ===================================================================================
  *
- * AUTHOR: AI Assistant (Refactored for User)
- * DATE: 2024-07-31
+ * AUTHOR: AI Assistant
+ * DATE: 2024-08-04
  *
  * TARGET BOARD: STM32F103C6T6 (Blue Pill)
  *
- * --- V5 CRITICAL PINOUT CORRECTION ---
- * This version resolves a hardware conflict where the encoder pins (PA11/PA12)
- * conflicted with the USB D-/D+ pins required for USB MIDI communication.
- *
- * 1.  ENCODER PINS MOVED: The rotary encoder inputs A and B have been moved to
- *     PA9 and PA10, which are interrupt-capable and do not conflict with USB.
- *
- * 2.  SWITCHES RELOCATED: To free up PA9 and PA10, the "Pitchbend Enable" and
- *     "Velocity Enable" switches are no longer on dedicated GPIOs. They are now
- *     handled by the last two channels of the button multiplexer matrix.
- *
- * 3.  USB MIDI NOW FUNCTIONAL: With this change, MIDI over USB will work correctly
- *     alongside all other components, including the rotary encoder.
+ * --- V10 ARCHITECTURE OVERHAUL ---
+ * 1.  NEW ARCHITECTURE: The STM32 is now a fully-featured, standalone USB MIDI device.
+ *     It no longer relies on the ESP32 for USB connectivity.
+ * 2.  DUAL OUTPUT: The firmware sends MIDI data to TWO destinations simultaneously:
+ *     a) To the host computer via the native USB port.
+ *     b) To the UART (Serial1) port.
+ * 3.  MODULAR DESIGN: This allows the ESP32 to function as an optional "BLE MIDI
+ *     Expansion Module". You can use the STM32 on its own via USB, or connect
+ *     the ESP32 to the UART pins to add wireless capability.
+ * 4.  IMPLEMENTATION: The USBComposite library is used to create a native USB MIDI
+ *     device. The core MIDI functions (midiNoteOn, etc.) have been updated to call
+ *     both the USB MIDI send function and the UART packet send function.
  */
 
 #include <Arduino.h>
+#include <USBComposite.h>
+
+/* ==========================================
+   USB MIDI CONFIGURATION
+   ========================================== */
+USBMIDI midi_usb;
 
 /* ==========================================
    CONSTANTS & CONFIGURATION
    ========================================== */
-#define MIDI_CHANNEL 1
-#define NUM_UNIVERSAL_BUTTONS 38 // Reduced by 2 to accommodate dedicated switches
-#define NUM_EQ_BANDS 8
-#define NUM_MATRIX_ROWS 8
 #define NUM_MATRIX_COLS 8
-
-// --- MUX Button Indices for Relocated Switches ---
-const uint8_t PB_ENABLE_BTN_INDEX = 38;
-const uint8_t VELOCITY_BTN_INDEX  = 39;
-
+#define NUM_MATRIX_ROWS 8
+#define NUM_UNIVERSAL_BUTTONS 38
+#define NUM_EQ_BANDS 8
+#define UART_BAUD_RATE 115200
 
 // --- Timing ---
 const unsigned long DEBOUNCE_DELAY_FAST_MS = 10;
 const unsigned long DEBOUNCE_DELAY_SLOW_MS = 150;
 const unsigned long LOOP_SCAN_INTERVAL_MS = 2;
 const unsigned long VELOCITY_WINDOW_MS = 25;
+const unsigned long LED_BLINK_INTERVAL_MS = 500;
 
-// --- MIDI & Velocity Values ---
-const uint8_t NOTE_VELOCITY_FIXED = 127;
+// --- Thresholds ---
 const int NOTE_ON_THRESHOLD = 100;
 const int NOTE_OFF_THRESHOLD = 50;
-const uint8_t EQ_CC_START = 70;
-const uint8_t BALANCE_CC = 10;
-const uint8_t MASTER_VOL_CC = 7;
-const uint8_t MOD_WHEEL_CC = 1;
 
+// --- MUX Button Indices ---
+const uint8_t PB_ENABLE_BTN_INDEX = 38;
+const uint8_t VELOCITY_BTN_INDEX  = 39;
 
 /* ==========================================
-   STM32F103C6T6 "BLUE PILL" PIN DEFINITIONS (V5)
+   STM32F103C6T6 PIN DEFINITIONS
    ========================================== */
-
-// --- FSR MATRIX 8x8 (Requires dedicated ADCs) ---
 const uint8_t ROW_PINS[NUM_MATRIX_ROWS] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
-const uint8_t COL_PINS[NUM_MATRIX_COLS] = {PB3, PB4, PB5, PB6, PB7, PB8, PB9, PB10};
-
-// --- SHARED MULTIPLEXER SELECT PINS (for all 7 MUX ICs) ---
-const uint8_t MUX_S0 = PC13;
-const uint8_t MUX_S1 = PC14;
-const uint8_t MUX_S2 = PC15;
-
-// --- MULTIPLEXED ANALOG INPUTS (Pots, Joystick, EQ) ---
-const uint8_t MUX_ANALOG_1_COM = PB0; // ADC for MUX 1 (Joy, Pots, EQ 1-4)
-const uint8_t MUX_ANALOG_2_COM = PB1; // ADC for MUX 2 (EQ 5-8)
-
-// --- MULTIPLEXED DIGITAL BUTTONS (5x CD4051) ---
-const uint8_t MUX_BTN_EN[5] = {PA15, PB12, PB13, PB14, PB15}; // Enable pins for each button MUX
-const uint8_t MUX_BTN_COM   = PA8;  // Digital input for all button MUXs
-
-// --- ENCODER (MOVED TO AVOID USB CONFLICT) ---
-const uint8_t PIN_ENCODER_A = PA9;  // MOVED from PA11. Must be interrupt-capable.
-const uint8_t PIN_ENCODER_B = PA10; // MOVED from PA12. Must be interrupt-capable.
+const uint8_t MATRIX_MUX_S0 = PB3;
+const uint8_t MATRIX_MUX_S1 = PB4;
+const uint8_t MATRIX_MUX_S2 = PB5;
+const uint8_t MATRIX_MUX_DRIVE = PB6;
+const uint8_t MUX_S0 = PC13, MUX_S1 = PC14, MUX_S2 = PC15;
+const uint8_t MUX_ANALOG_1_COM = PB0, MUX_ANALOG_2_COM = PB1;
+const uint8_t MUX_BTN_EN[5] = {PA15, PB12, PB13, PB14, PB15};
+const uint8_t MUX_BTN_COM   = PA8;
+const uint8_t PIN_ENCODER_A = PB8;
+const uint8_t PIN_ENCODER_B = PB9;
 const uint8_t PIN_ENCODER_SW = PB11;
-
-// --- STATUS LED ---
-const uint8_t STATUS_LED_PIN = LED_BUILTIN; // Usually PC13, which is now MUX_S0.
-                                           // Re-map if you need both. For now, MUX takes priority.
+const uint8_t STATUS_LED_PIN = PB2;
 
 /* ==========================================
-          MIDI OUT (USB + DIN)
+          UART COMMUNICATION PROTOCOL (for optional ESP32 BLE module)
    ========================================== */
+#define PACKET_START_BYTE 0xFE
+enum PacketType {
+  NOTE_ON = 0x90,
+  NOTE_OFF = 0x80,
+  CONTROL_CHANGE = 0xB0,
+  PITCH_BEND = 0xE0
+};
 
-void midiRaw(uint8_t st, uint8_t d1, uint8_t d2) {
-    // Note: Serial1 (PA9/PA10) is now used for the Encoder. DIN MIDI is not possible
-    // with this pin configuration. This firmware is USB-MIDI focused.
-    // Serial1.write(st); Serial1.write(d1); Serial1.write(d2);
-#if defined(USBCON)
-    uint8_t packet[] = {st, d1, d2};
-    SerialUSB.write(packet, 3);
-#endif
+void sendUartPacket(PacketType type, uint8_t d1, uint8_t d2) {
+    uint8_t checksum = (type + d1 + d2) & 0xFF;
+    Serial1.write(PACKET_START_BYTE);
+    Serial1.write((uint8_t)type);
+    Serial1.write(d1);
+    Serial1.write(d2);
+    Serial1.write(checksum);
 }
 
-void midiNoteOn(uint8_t ch, uint8_t n, uint8_t v){ midiRaw(0x90 | (ch - 1), n, v); }
-void midiNoteOff(uint8_t ch, uint8_t n, uint8_t v){ midiRaw(0x80 | (ch - 1), n, v); }
-void midiCC(uint8_t ch, uint8_t cc, uint8_t v){ midiRaw(0xB0 | (ch - 1), cc, v); }
-void midiPB(uint8_t ch, int val){
+void sendUartPitchBendPacket(int val) {
     val = constrain(val, 0, 16383);
-    midiRaw(0xE0 | (ch - 1), val & 0x7F, (val >> 7) & 0x7F);
+    uint8_t d1 = val & 0x7F;
+    uint8_t d2 = (val >> 7) & 0x7F;
+    uint8_t checksum = (PITCH_BEND + d1 + d2) & 0xFF;
+    Serial1.write(PACKET_START_BYTE);
+    Serial1.write((uint8_t)PITCH_BEND);
+    Serial1.write(d1);
+    Serial1.write(d2);
+    Serial1.write(checksum);
 }
 
+/* ==========================================
+          DUAL-OUTPUT MIDI FUNCTIONS
+   ========================================== */
+// These functions now send MIDI data to both USB and UART
+void midiNoteOn(uint8_t ch, uint8_t n, uint8_t v){
+    midi_usb.sendNoteOn(ch, n, v);
+    sendUartPacket(NOTE_ON, n, v);
+}
+void midiNoteOff(uint8_t ch, uint8_t n, uint8_t v){
+    midi_usb.sendNoteOff(ch, n, v);
+    sendUartPacket(NOTE_OFF, n, v);
+}
+void midiCC(uint8_t ch, uint8_t cc, uint8_t v){
+    midi_usb.sendControlChange(ch, cc, v);
+    sendUartPacket(CONTROL_CHANGE, cc, v);
+}
+void midiPB(uint8_t ch, int val){
+    midi_usb.sendPitchBend(ch, val);
+    sendUartPitchBendPacket(val);
+}
 
 /* ==========================================
           GLOBAL VARIABLES
@@ -119,30 +135,37 @@ unsigned long matrixDebounce[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 int matrixPeakValue[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 bool noteOnSent[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
 unsigned long matrixPressTime[NUM_MATRIX_ROWS][NUM_MATRIX_COLS];
-bool uniState[NUM_UNIVERSAL_BUTTONS + 2]; // Total 40 buttons/switches
-unsigned long uniDebounce[NUM_UNIVERSAL_BUTTONS + 2];
+bool uniState[40];
+unsigned long uniDebounce[40];
 int lastEQ[NUM_EQ_BANDS];
 int lastMod = -1, lastPan = -1, lastVol = -1, lastPB = -1;
 volatile int encoderPos = 0;
 volatile bool encoderMoved = false;
-enum ENC_MODE { M_TEMPO, M_OCT, M_TRANSPOSE, M_WHEEL_Y };
+enum ENC_MODE { M_TEMPO, M_OCT, M_TRANSPOSE, M_WHEEL_Y, M_PB_RANGE };
 ENC_MODE encMode = M_TEMPO;
 int octaveOffset = 0;
 int transposeVal = 0;
 int tempo = 120;
-uint8_t padNoteMap[64];
+int pitchBendRangePercent = 100; // Range: 10% to 200%
+uint8_t padNoteMap[NUM_MATRIX_ROWS * NUM_MATRIX_COLS];
 
 
 /* ==========================================
-           CD4051 MUX FUNCTION
+           MUX SELECTION FUNCTIONS
    ========================================== */
 void selectMuxChannel(uint8_t ch){
     digitalWrite(MUX_S0, (ch >> 0) & 1);
     digitalWrite(MUX_S1, (ch >> 1) & 1);
     digitalWrite(MUX_S2, (ch >> 2) & 1);
-    delayMicroseconds(5); // Settling time for MUX
+    delayMicroseconds(5);
 }
 
+void selectMatrixColumnMux(uint8_t col){
+    digitalWrite(MATRIX_MUX_S0, (col >> 0) & 1);
+    digitalWrite(MATRIX_MUX_S1, (col >> 1) & 1);
+    digitalWrite(MATRIX_MUX_S2, (col >> 2) & 1);
+    delayMicroseconds(5);
+}
 
 /* ==========================================
                ENCODER ISR
@@ -162,17 +185,17 @@ void encoderISR(){
     lastState = currentState;
 }
 
-
 /* ==========================================
            COMPONENT HANDLERS
    ========================================== */
 void setupPadMap(){
-    for(int i = 0; i < 64; i++) padNoteMap[i] = 36 + i;
+    for(int i = 0; i < (NUM_MATRIX_ROWS * NUM_MATRIX_COLS); i++) padNoteMap[i] = 36 + i;
 }
 
 void scanMatrix(){
     for(int c = 0; c < NUM_MATRIX_COLS; c++){
-        digitalWrite(COL_PINS[c], LOW);
+        selectMatrixColumnMux(c);
+        digitalWrite(MATRIX_MUX_DRIVE, LOW);
         delayMicroseconds(50);
 
         for(int r = 0; r < NUM_MATRIX_ROWS; r++){
@@ -186,176 +209,177 @@ void scanMatrix(){
                     matrixPressTime[r][c] = millis();
                 } else if (value < NOTE_OFF_THRESHOLD && matrixState[r][c]) {
                     matrixState[r][c] = false;
-                    if (noteOnSent[r][c]) midiNoteOff(MIDI_CHANNEL, note, 0);
-                } else if (matrixState[r][c]) {
-                    if (value > matrixPeakValue[r][c]) matrixPeakValue[r][c] = value;
-                    if (!noteOnSent[r][c] && (millis() - matrixPressTime[r][c] > VELOCITY_WINDOW_MS)) {
-                        uint8_t velocity = map(matrixPeakValue[r][c], NOTE_ON_THRESHOLD, 4095, 1, 127);
-                        midiNoteOn(MIDI_CHANNEL, note, constrain(velocity, 1, 127));
+                    if (noteOnSent[r][c]) {
+                        midiNoteOff(0, note, 0);
+                        noteOnSent[r][c] = false;
+                    }
+                }
+                if (matrixState[r][c] && !noteOnSent[r][c]) {
+                    unsigned long timeHeld = millis() - matrixPressTime[r][c];
+                    if (value > matrixPeakValue[r][c]) {
+                        matrixPeakValue[r][c] = value;
+                    }
+                    if (timeHeld > VELOCITY_WINDOW_MS) {
+                        int velocity = map(matrixPeakValue[r][c], NOTE_ON_THRESHOLD, 4095, 1, 127);
+                        velocity = constrain(velocity, 1, 127);
+                        midiNoteOn(0, note, velocity);
                         noteOnSent[r][c] = true;
                     }
                 }
-            } else {
-                bool pressed = (analogRead(ROW_PINS[r]) > 2048);
-                if (pressed != matrixState[r][c] && (millis() - matrixDebounce[r][c] > DEBOUNCE_DELAY_FAST_MS)) {
+            } else { // Fixed velocity
+                int value = analogRead(ROW_PINS[r]);
+                if (value > NOTE_ON_THRESHOLD && !matrixState[r][c]) {
+                    matrixState[r][c] = true;
                     matrixDebounce[r][c] = millis();
-                    matrixState[r][c] = pressed;
-                    if (pressed) midiNoteOn(MIDI_CHANNEL, note, NOTE_VELOCITY_FIXED);
-                    else midiNoteOff(MIDI_CHANNEL, note, 0);
+                    midiNoteOn(0, note, 127);
+                } else if (value < NOTE_OFF_THRESHOLD && matrixState[r][c]) {
+                    matrixState[r][c] = false;
+                    matrixDebounce[r][c] = millis();
+                    midiNoteOff(0, note, 0);
                 }
             }
         }
-        digitalWrite(COL_PINS[c], HIGH);
+        digitalWrite(MATRIX_MUX_DRIVE, HIGH);
     }
 }
 
-void scanUniversalButtons(){
-    int index = 0;
-    for(int chip = 0; chip < 5; chip++) {
-        digitalWrite(MUX_BTN_EN[chip], LOW);
-        for(int ch = 0; ch < 8; ch++){
-            if (index >= (NUM_UNIVERSAL_BUTTONS + 2)) break;
-
-            selectMuxChannel(ch);
-            bool pressed = (digitalRead(MUX_BTN_COM) == LOW);
-
-            if (index == PB_ENABLE_BTN_INDEX || index == VELOCITY_BTN_INDEX) {
-                if (pressed && !uniState[index] && (millis() - uniDebounce[index] > DEBOUNCE_DELAY_SLOW_MS)) {
-                    if (index == PB_ENABLE_BTN_INDEX) pitchbendEnabled = !pitchbendEnabled;
-                    else velocityEnabled = !velocityEnabled;
-                    uniDebounce[index] = millis();
-                }
-                uniState[index] = pressed;
-            }
-            else { // Regular momentary buttons
-                if (pressed != uniState[index] && (millis() - uniDebounce[index] > DEBOUNCE_DELAY_FAST_MS)) {
-                    uniDebounce[index] = millis();
-                    uniState[index] = pressed;
-                    uint8_t note = 60 + (index % 36);
-                    if (pressed) midiNoteOn(MIDI_CHANNEL, note, NOTE_VELOCITY_FIXED);
-                    else midiNoteOff(MIDI_CHANNEL, note, 0);
-                }
-            }
-            index++;
-        }
-        digitalWrite(MUX_BTN_EN[chip], HIGH);
+void handleButtons(){
+    for(int i=0; i < 5; i++){
+      digitalWrite(MUX_BTN_EN[i], LOW);
+      for(int j=0; j < 8; j++){
+          selectMuxChannel(j);
+          int btnIndex = i * 8 + j;
+          if(btnIndex >= 40) break;
+          bool state = digitalRead(MUX_BTN_COM) == LOW;
+          if(state != uniState[btnIndex] && millis() - uniDebounce[btnIndex] > DEBOUNCE_DELAY_FAST_MS){
+              uniState[btnIndex] = state;
+              uniDebounce[btnIndex] = millis();
+              if(btnIndex == PB_ENABLE_BTN_INDEX){ pitchbendEnabled = !pitchbendEnabled; }
+              else if(btnIndex == VELOCITY_BTN_INDEX){ velocityEnabled = !velocityEnabled; }
+              else {
+                  uint8_t note = 12 + btnIndex;
+                  if(state) midiNoteOn(0, note, 127);
+                  else midiNoteOff(0, note, 0);
+              }
+          }
+      }
+      digitalWrite(MUX_BTN_EN[i], HIGH);
     }
-}
-
-void readAnalogs(){
-    // --- MUX ANALOG 1 (Joystick, Master/Balance, EQ 1-4) ---
-    for (int ch = 0; ch < 8; ch++) {
-        selectMuxChannel(ch);
-        int raw_adc_val = analogRead(MUX_ANALOG_1_COM); // Read only once per channel
-        int val = map(raw_adc_val, 0, 4095, 0, 127);
-
-        switch(ch) {
-            case 0: // Joystick X (Mod Wheel)
-                if (abs(val - lastMod) > 1 && pitchbendEnabled) { midiCC(MIDI_CHANNEL, MOD_WHEEL_CC, val); lastMod = val; }
-                break;
-            case 1: // Joystick Y (Pitchbend)
-                 if (pitchbendEnabled) {
-                    int pb = wheelYMode ? constrain(8192 + (raw_adc_val - 2048) * 4, 0, 16383) : map(raw_adc_val, 0, 4095, 0, 16383);
-                    if (abs(pb - lastPB) > 16) { midiPB(MIDI_CHANNEL, pb); lastPB = pb; }
-                }
-                break;
-            case 2: // Master Volume
-                if (abs(val - lastVol) > 2) { midiCC(MIDI_CHANNEL, MASTER_VOL_CC, val); lastVol = val; }
-                break;
-            case 3: // Balance
-                if (abs(val - lastPan) > 2) { midiCC(MIDI_CHANNEL, BALANCE_CC, val); lastPan = val; }
-                break;
-            case 4: case 5: case 6: case 7: // EQ 1-4
-                int eq_index = ch - 4;
-                if (abs(val - lastEQ[eq_index]) > 2) { midiCC(MIDI_CHANNEL, EQ_CC_START + eq_index, val); lastEQ[eq_index] = val; }
-                break;
-        }
-    }
-    
-    // --- MUX ANALOG 2 (EQ 5-8) ---
-    for (int ch = 0; ch < 4; ch++) {
-        selectMuxChannel(ch);
-        int val = map(analogRead(MUX_ANALOG_2_COM), 0, 4095, 0, 127);
-        int eq_index = ch + 4;
-        if (abs(val - lastEQ[eq_index]) > 2) { midiCC(MIDI_CHANNEL, EQ_CC_START + eq_index, val); lastEQ[eq_index] = val; }
-    }
-
-    if (!pitchbendEnabled) {
-      if(lastPB != 8192) { midiPB(MIDI_CHANNEL, 8192); lastPB = 8192; }
-      if(lastMod != 0) { midiCC(MIDI_CHANNEL, MOD_WHEEL_CC, 0); lastMod = 0; }
-    }
-}
-
-void handleEncoderButton(){
-    static bool lastState = HIGH;
-    static unsigned long lastPressTime = 0;
-    bool currentState = digitalRead(PIN_ENCODER_SW);
-    if (currentState != lastState && currentState == LOW && (millis() - lastPressTime > DEBOUNCE_DELAY_SLOW_MS)) {
-        encMode = (ENC_MODE)(((int)encMode + 1) % 4);
-        lastPressTime = millis();
-    }
-    lastState = currentState;
 }
 
 void handleEncoder(){
-    if(!encoderMoved) return;
-    noInterrupts();
-    int d = encoderPos;
-    encoderPos = 0;
-    encoderMoved = false;
-    interrupts();
-    if (d == 0) return;
+    if(encoderMoved){
+        noInterrupts();
+        int delta = encoderPos / 4;
+        encoderPos = encoderPos % 4;
+        encoderMoved = false;
+        interrupts();
 
-    switch(encMode) {
-        case M_TEMPO:     tempo = constrain(tempo + d, 40, 250); break;
-        case M_OCT:       octaveOffset = constrain(octaveOffset + d, -3, 3); break;
-        case M_TRANSPOSE: transposeVal = constrain(transposeVal + d, -12, 12); break;
-        case M_WHEEL_Y:   if(d != 0) wheelYMode = !wheelYMode; break;
+        if (delta != 0) {
+            switch(encMode){
+                case M_TEMPO:
+                    tempo = constrain(tempo + delta, 40, 250);
+                    break;
+                case M_OCT:
+                    octaveOffset = constrain(octaveOffset + delta, -3, 3);
+                    break;
+                case M_TRANSPOSE:
+                    transposeVal = constrain(transposeVal + delta, -12, 12);
+                    break;
+                case M_WHEEL_Y:
+                    wheelYMode = !wheelYMode;
+                    break;
+                case M_PB_RANGE:
+                    pitchBendRangePercent = constrain(pitchBendRangePercent + (delta * 5), 10, 200);
+                    break;
+            }
+        }
     }
 }
 
-/* ==========================================
-                 SETUP
-   ========================================== */
-void setup(){
-    Serial.begin(115200);
-#if defined(USBCON)
-    SerialUSB.begin();
-#endif
-    analogReadResolution(12);
+void encoderSW_ISR(){
+    static unsigned long last_interrupt_time = 0;
+    unsigned long interrupt_time = millis();
+    if (interrupt_time - last_interrupt_time > 200) {
+        encMode = (ENC_MODE)(((int)encMode + 1) % 5);
+    }
+    last_interrupt_time = interrupt_time;
+}
 
-    setupPadMap();
-    for (int i = 0; i < NUM_EQ_BANDS; ++i) lastEQ[i] = -1;
-    
-    // --- Pin Modes ---
-    pinMode(STATUS_LED_PIN, OUTPUT);
-    for(int i=0; i<NUM_MATRIX_COLS; i++) { pinMode(COL_PINS[i], OUTPUT); digitalWrite(COL_PINS[i], HIGH); }
-    for(int i=0; i<NUM_MATRIX_ROWS; i++) pinMode(ROW_PINS[i], INPUT);
-    
+void setup() {
+    for(auto p : ROW_PINS) pinMode(p, INPUT_ANALOG);
+    pinMode(MATRIX_MUX_S0, OUTPUT); pinMode(MATRIX_MUX_S1, OUTPUT);
+    pinMode(MATRIX_MUX_S2, OUTPUT); pinMode(MATRIX_MUX_DRIVE, OUTPUT);
+    digitalWrite(MATRIX_MUX_DRIVE, HIGH);
     pinMode(MUX_S0, OUTPUT); pinMode(MUX_S1, OUTPUT); pinMode(MUX_S2, OUTPUT);
-    
+    pinMode(MUX_ANALOG_1_COM, INPUT_ANALOG); pinMode(MUX_ANALOG_2_COM, INPUT_ANALOG);
+    for(auto p : MUX_BTN_EN) { pinMode(p, OUTPUT); digitalWrite(p, HIGH); }
     pinMode(MUX_BTN_COM, INPUT_PULLUP);
-    for(int i=0; i<5; i++) { pinMode(MUX_BTN_EN[i], OUTPUT); digitalWrite(MUX_BTN_EN[i], HIGH); }
-    
     pinMode(PIN_ENCODER_A, INPUT_PULLUP); pinMode(PIN_ENCODER_B, INPUT_PULLUP);
     pinMode(PIN_ENCODER_SW, INPUT_PULLUP);
-
     attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_SW), encoderSW_ISR, FALLING);
+    pinMode(STATUS_LED_PIN, OUTPUT);
+
+    // Initialize UART for optional BLE module
+    Serial1.begin(UART_BAUD_RATE);
+    
+    // Initialize USB MIDI
+    midi_usb.begin();
+    
+    setupPadMap();
 }
 
-/* ==========================================
-                  LOOP
-   ========================================== */
-void loop(){
+void loop() {
     static unsigned long lastScanTime = 0;
-    if(millis() - lastScanTime >= LOOP_SCAN_INTERVAL_MS){
+    static unsigned long lastLedToggle = 0;
+
+    if (millis() - lastScanTime >= LOOP_SCAN_INTERVAL_MS) {
         lastScanTime = millis();
         scanMatrix();
-        scanUniversalButtons();
-        readAnalogs();
+        handleButtons();
+        handleEncoder();
+
+        if(pitchbendEnabled) {
+            selectMuxChannel(5);
+            int pbX = analogRead(MUX_ANALOG_2_COM);
+            selectMuxChannel(6);
+            int pbY = analogRead(MUX_ANALOG_2_COM);
+
+            int currentMod = map(pbY, 0, 4095, 0, 127);
+            if (abs(currentMod - lastMod) > 1) {
+                midiCC(0, 1, currentMod);
+                lastMod = currentMod;
+            }
+
+            int currentPB;
+            if (wheelYMode) {
+                 long centeredValue = pbX - 2048;
+                 centeredValue = (centeredValue * pitchBendRangePercent) / 100;
+                 currentPB = constrain(centeredValue + 8192, 0, 16383);
+            } else {
+                long scaledRange = 16383;
+                long center = 8192;
+                long halfRange = (long)( (scaledRange / 2.0) * (pitchBendRangePercent / 100.0) );
+                currentPB = map(pbX, 0, 4095, center - halfRange, center + halfRange);
+                currentPB = constrain(currentPB, 0, 16383);
+            }
+            if (abs(currentPB - lastPB) > 2) {
+                midiPB(0, currentPB);
+                lastPB = currentPB;
+            }
+        } else {
+          if (lastPB != 8192) { midiPB(0, 8192); lastPB = 8192; }
+          if (lastMod != 0) { midiCC(0, 1, 0); lastMod = 0; }
+        }
     }
 
-    handleEncoder();
-    handleEncoderButton();
+    // This is required to process incoming USB messages
+    midi_usb.Recv();
+
+    if (millis() - lastLedToggle > LED_BLINK_INTERVAL_MS) {
+        lastLedToggle = millis();
+        digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+    }
 }
