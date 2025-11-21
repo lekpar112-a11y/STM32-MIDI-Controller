@@ -1,68 +1,61 @@
-name: Compile STM32 MIDI V7
+name: Compile STM32 MIDI V7 (Auto-Fix)
 
-on:
-  push:
-    paths:
-      - '**.ino'
-      - '**.yml'
-  workflow_dispatch: # Tombol manual "Run"
+on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Cek File Repository
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # 2. Siapkan Arduino CLI
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # 3. Install Core STM32 (Versi Roger Clark / Maple)
-    # Ini WAJIB karena library USBComposite hanya jalan di core ini.
+    # --- LANGKAH PERBAIKAN OTOMATIS (AUTO-FIX) ---
+    # Langkah ini akan mencari file .ino Anda dan memindahkannya ke folder yang benar
+    - name: Fix Folder Structure
+      run: |
+        echo "Sedang merapikan struktur folder..."
+        
+        # Buat folder MidiV7
+        mkdir -p MidiV7
+        
+        # Jika file ada di luar (root), pindahkan ke dalam folder
+        if [ -f "MidiV7.ino" ]; then
+          mv MidiV7.ino MidiV7/MidiV7.ino
+          echo "BERHASIL: File dipindahkan ke dalam folder MidiV7."
+        elif [ -f "main.cpp" ]; then
+          mv main.cpp MidiV7/MidiV7.ino
+          echo "BERHASIL: File main.cpp diubah menjadi MidiV7.ino."
+        else
+          echo "Info: File mungkin sudah ada di dalam folder atau nama file beda."
+        fi
+        
+        # Cek isi folder untuk memastikan
+        ls -R MidiV7/
+
     - name: Install STM32 Core (Roger Clark)
       run: |
         arduino-cli config init
-        # Tambahkan URL board manager khusus Roger Clark
         arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
         arduino-cli core update-index
-        # Install core stm32duino (bukan STMicroelectronics)
         arduino-cli core install stm32duino:STM32F1
 
-    # 4. Install Library USBComposite Manual
-    # Library ini tidak ada di database resmi, jadi kita 'git clone' manual
     - name: Install Library USBComposite
       run: |
         mkdir -p libraries
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
 
-    # 5. Cek Struktur File (Debugging)
-    # Langkah ini untuk memastikan file .ino Anda ada di tempat yang benar
-    - name: Check File Structure
-      run: |
-        ls -R
-        if [ ! -f "MidiV7/MidiV7.ino" ]; then
-          echo "ERROR: File MidiV7/MidiV7.ino tidak ditemukan!"
-          echo "Pastikan Anda membuat folder 'MidiV7' dan menamai file codingan 'MidiV7.ino'"
-          exit 1
-        fi
-
-    # 6. Proses Compile (BluePill F103C6)
     - name: Compile Sketch
       run: |
-        # FQBN Panjang ini khusus untuk Core Roger Clark
-        # Board: Generic STM32F103C
-        # Variant: C6 (32k Flash)
-        # Upload: STLink
-        # USB: Composite (Agar jadi MIDI)
+        # Compile file yang sudah dipastikan ada di dalam folder
         arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C6,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
 
-    # 7. Upload Hasil Compile (.bin) ke Artifacts
     - name: Upload Firmware Artifact
       uses: actions/upload-artifact@v4
       with:
