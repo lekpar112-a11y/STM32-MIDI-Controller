@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V7 (Auto-Fix)
+name: Compile STM32 MIDI V7 (Fix USB Option)
 
 on: [push, workflow_dispatch]
 
@@ -13,27 +13,17 @@ jobs:
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # --- LANGKAH PERBAIKAN OTOMATIS (AUTO-FIX) ---
-    # Langkah ini akan mencari file .ino Anda dan memindahkannya ke folder yang benar
+    # --- AUTO-FIX STRUKTUR FOLDER ---
+    # Memastikan file .ino ada di dalam folder yang benar
     - name: Fix Folder Structure
       run: |
-        echo "Sedang merapikan struktur folder..."
-        
-        # Buat folder MidiV7
         mkdir -p MidiV7
-        
-        # Jika file ada di luar (root), pindahkan ke dalam folder
         if [ -f "MidiV7.ino" ]; then
           mv MidiV7.ino MidiV7/MidiV7.ino
-          echo "BERHASIL: File dipindahkan ke dalam folder MidiV7."
         elif [ -f "main.cpp" ]; then
           mv main.cpp MidiV7/MidiV7.ino
-          echo "BERHASIL: File main.cpp diubah menjadi MidiV7.ino."
-        else
-          echo "Info: File mungkin sudah ada di dalam folder atau nama file beda."
         fi
-        
-        # Cek isi folder untuk memastikan
+        # Debug: Cek file
         ls -R MidiV7/
 
     - name: Install STM32 Core (Roger Clark)
@@ -50,8 +40,11 @@ jobs:
 
     - name: Compile Sketch
       run: |
-        # Compile file yang sudah dipastikan ada di dalam folder
-        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C6,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
+        # PERUBAHAN PENTING DI SINI:
+        # device_variant saya ubah jadi STM32F103C8 (bukan C6)
+        # Ini agar opsi 'usb=composite' diterima oleh compiler.
+        
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
