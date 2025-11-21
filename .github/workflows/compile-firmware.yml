@@ -1,33 +1,48 @@
-name: PlatformIO Build
+name: Compile STM32 MIDI V7
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    paths:
+      - '**.ino'
+      - '**.yml'
+  workflow_dispatch: # Supaya bisa klik tombol "Run" manual
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v1.1.2
 
-      - name: Install PlatformIO Core
-        run: pip install -U platformio
+    - name: Install Core (Roger Clark / STM32duino Libmaple)
+      run: |
+        arduino-cli config init
+        # Menggunakan URL Dan Drown (Maintainer Roger Clark Core)
+        arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
+        arduino-cli core update-index
+        arduino-cli core install stm32duino:STM32F1
 
-      - name: Build PlatformIO Project
-        run: pio run
+    - name: Install Library (USBComposite)
+      run: |
+        mkdir -p libraries
+        # Clone library wajib untuk USB MIDI
+        git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
 
-      - name: Upload Artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compiled-firmware
-          path: .pio/build/bluepill_f103c8/firmware.bin
+    - name: Compile Sketch
+      run: |
+        # FQBN untuk BluePill F103C6 di Roger Clark Core
+        # Opsi: C6 (32k), 72MHz, USB Composite, Bootloader 2.0/Generic
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C6,cpu_speed=speed_72mhz,upload_method=STLinkMethod,usb=composite \
+        --libraries libraries \
+        --output-dir build \
+        MidiV7/MidiV7.ino
+
+    - name: Upload Artifact (Bin/Hex)
+      uses: actions/upload-artifact@v4
+      with:
+        name: stm32-midi-firmware
+        path: build/
