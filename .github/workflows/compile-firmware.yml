@@ -1,47 +1,54 @@
-name: Compile STM32 MIDI V7
+name: Compile STM32 MIDI V7 (Arduino CLI)
 
 on:
   push:
     paths:
-      - '**.ino'
+      - '**.ino' # Hanya jalan jika ada file .ino berubah
       - '**.yml'
-  workflow_dispatch: # Supaya bisa klik tombol "Run" manual
+  workflow_dispatch: # Agar tombol "Run Workflow" muncul manual
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
+    # 1. Ambil Source Code dari Repo
+    - name: Checkout Code
       uses: actions/checkout@v4
 
+    # 2. Siapkan Arduino CLI
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    - name: Install Core (Roger Clark / STM32duino Libmaple)
+    # 3. Install Core STM32 (Versi Roger Clark / Dan Drown)
+    # PENTING: Core ini wajib dipakai agar library USBComposite jalan.
+    - name: Install STM32 Core
       run: |
         arduino-cli config init
-        # Menggunakan URL Dan Drown (Maintainer Roger Clark Core)
+        arduino-cli config add board_manager.additional_urls https://github.com/stm32duino/BoardManagerFiles/raw/main/package_stmicroelectronics_index.json
         arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    - name: Install Library (USBComposite)
+    # 4. Install Library USBComposite secara Manual
+    # Library ini TIDAK ADA di Library Manager, jadi harus di-clone manual.
+    - name: Install Library USBComposite
       run: |
         mkdir -p libraries
-        # Clone library wajib untuk USB MIDI
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
 
+    # 5. Proses Compile
     - name: Compile Sketch
       run: |
-        # FQBN untuk BluePill F103C6 di Roger Clark Core
-        # Opsi: C6 (32k), 72MHz, USB Composite, Bootloader 2.0/Generic
+        # Menggunakan FQBN khusus untuk Core Roger Clark (stm32duino)
+        # Board: BluePill F103C6, 72MHz, USB Composite ON
         arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C6,cpu_speed=speed_72mhz,upload_method=STLinkMethod,usb=composite \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
 
-    - name: Upload Artifact (Bin/Hex)
+    # 6. Simpan Hasil (.bin) agar bisa didownload
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: stm32-midi-firmware
