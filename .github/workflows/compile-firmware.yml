@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V14 (Manual Core)
+name: Compile STM32 MIDI V15 (BluePill PNUM)
 
 on: [push, workflow_dispatch]
 
@@ -13,7 +13,7 @@ jobs:
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # --- 1. PERBAIKI FOLDER ---
+    # --- 1. AUTO-FIX FOLDER ---
     - name: Fix Folder Structure
       run: |
         mkdir -p MidiV7
@@ -23,44 +23,40 @@ jobs:
           mv main.cpp MidiV7/MidiV7.ino
         fi
 
-    # --- 2. INSTALL TOOLS (Compiler) ---
-    # Kita install core dummy cuma buat dapetin tool 'arm-none-eabi-gcc'
-    - name: Install Compiler Tools
+    # --- 2. INSTALL CORE (HANYA URL ROGER CLARK) ---
+    # Kita HAPUS url stmicroelectronics agar tidak bentrok.
+    - name: Install STM32 Core
       run: |
         arduino-cli config init
         arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    # --- 3. INSTALL CORE SECARA MANUAL (Git Clone) ---
-    # Ini langkah kuncinya. Kita download Core Roger Clark yang ASLI.
-    # Kita taruh di folder 'hardware' agar terbaca sebagai core manual.
-    - name: Install Roger Clark Core Manual
+    # --- 3. CEK KEBENARAN MENU (DIAGNOSTIK) ---
+    # Langkah ini akan mencetak semua opsi yang valid ke layar Log.
+    # Jika langkah compile di bawah merah, Buka log langkah ini untuk lihat contekannya.
+    - name: DEBUG - Print Board Details
       run: |
-        mkdir -p $HOME/.arduino15/packages/arduino/hardware/STM32F1/1.0.0
-        git clone https://github.com/rogerclarkmelbourne/Arduino_STM32.git hardware/Arduino_STM32
-        
-        # Hapus core stm32duino yang tadi (biar gak bentrok) tapi sisakan tools-nya
-        # Atau kita cukup gunakan FQBN yang berbeda.
+        arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
 
-    # --- 4. INSTALL LIBRARY & BERSIHKAN KONFLIK ---
-    - name: Install Library USBComposite
+    # --- 4. INSTALL LIBRARY & HAPUS KONFLIK ---
+    - name: Install Library & Clean Conflict
       run: |
         mkdir -p libraries
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
         
-        # Hapus library bawaan jika ada (safety)
-        rm -rf hardware/Arduino_STM32/STM32F1/libraries/USBComposite
+        echo "Menghapus library bawaan..."
+        rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
 
-    # --- 5. COMPILE (FQBN Manual) ---
+    # --- 5. COMPILE (METODE PNUM) ---
     - name: Compile Sketch
       run: |
-        # Perhatikan FQBN-nya beda!
-        # Bukan 'stm32duino:...', tapi 'Arduino_STM32:STM32F1:genericSTM32F103C'
-        # Ini menunjuk ke core yang baru kita download manual.
-        # Menu 'usb=composite' DIJAMIN ADA di core ini.
+        # PERUBAHAN V15:
+        # Menggunakan 'pnum=BLUEPILL_F103C8' (Part Number)
+        # Ini adalah cara baru memanggil BluePill di core versi 2022.
+        # Saya tetap gunakan C8 karena C6 seringkali tidak punya opsi lengkap.
         
-        arduino-cli compile --fqbn Arduino_STM32:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:pnum=BLUEPILL_F103C8,upload_method=STLinkMethod,usb=composite \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
