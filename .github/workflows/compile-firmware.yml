@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V15 (BluePill PNUM)
+name: Compile STM32 MIDI V16 (Diagnostic)
 
 on: [push, workflow_dispatch]
 
@@ -10,8 +10,9 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    # UPDATE PENTING: Pakai CLI versi terbaru (v2) bukan v1.1.2
     - name: Setup Arduino CLI
-      uses: arduino/setup-arduino-cli@v1.1.2
+      uses: arduino/setup-arduino-cli@v2
 
     # --- 1. AUTO-FIX FOLDER ---
     - name: Fix Folder Structure
@@ -23,23 +24,26 @@ jobs:
           mv main.cpp MidiV7/MidiV7.ino
         fi
 
-    # --- 2. INSTALL CORE (HANYA URL ROGER CLARK) ---
-    # Kita HAPUS url stmicroelectronics agar tidak bentrok.
-    - name: Install STM32 Core
+    # --- 2. INSTALL CORE ---
+    - name: Install STM32 Core (Roger Clark)
       run: |
         arduino-cli config init
         arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    # --- 3. CEK KEBENARAN MENU (DIAGNOSTIK) ---
-    # Langkah ini akan mencetak semua opsi yang valid ke layar Log.
-    # Jika langkah compile di bawah merah, Buka log langkah ini untuk lihat contekannya.
-    - name: DEBUG - Print Board Details
+    # --- 3. CEK MENU (WAJIB DIBUKA LOG-NYA) ---
+    # Jika compile di bawah gagal, KLIK langkah ini di GitHub Actions.
+    # Foto daftar tulisan yang muncul. Itu kunci jawabannya.
+    - name: DEBUG - SHOW VALID OPTIONS
       run: |
+        echo "=== DAFTAR BOARD ==="
+        arduino-cli board listall stm32duino
+        echo ""
+        echo "=== MENU YANG TERSEDIA ==="
         arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
 
-    # --- 4. INSTALL LIBRARY & HAPUS KONFLIK ---
+    # --- 4. INSTALL LIBRARY & CLEAN CONFLICT ---
     - name: Install Library & Clean Conflict
       run: |
         mkdir -p libraries
@@ -48,15 +52,15 @@ jobs:
         echo "Menghapus library bawaan..."
         rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
 
-    # --- 5. COMPILE (METODE PNUM) ---
+    # --- 5. COMPILE (SAFE MODE) ---
     - name: Compile Sketch
       run: |
-        # PERUBAHAN V15:
-        # Menggunakan 'pnum=BLUEPILL_F103C8' (Part Number)
-        # Ini adalah cara baru memanggil BluePill di core versi 2022.
-        # Saya tetap gunakan C8 karena C6 seringkali tidak punya opsi lengkap.
+        # KITA PAKAI VARIAN C8 (Standar)
+        # HAPUS opsi 'usb' dan 'pnum' dari FQBN.
+        # Kita paksa USB lewat --build-property.
         
-        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:pnum=BLUEPILL_F103C8,upload_method=STLinkMethod,usb=composite \
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz \
+        --build-property "build.extra_flags=-DUSB_COMPOSITE" \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
