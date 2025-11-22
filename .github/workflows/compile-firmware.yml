@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V10 (Manual Force)
+name: Compile STM32 MIDI V11 (Full Config)
 
 on: [push, workflow_dispatch]
 
@@ -13,7 +13,7 @@ jobs:
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # --- 1. AUTO-FIX FOLDER ---
+    # --- 1. AUTO-FIX FOLDER (Jaga-jaga) ---
     - name: Fix Folder Structure
       run: |
         mkdir -p MidiV7
@@ -31,28 +31,34 @@ jobs:
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    # --- 3. INSTALL LIBRARY & HAPUS CONFLICT ---
+    # --- 3. DEBUG: LIHAT OPSI BOARD ---
+    # Langkah ini akan mencetak daftar menu yang valid ke Log.
+    # Jika gagal lagi, klik bagian ini di log untuk lihat nama menu yang benar.
+    - name: Check Board Options
+      run: |
+        arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
+
+    # --- 4. INSTALL LIBRARY & HAPUS CONFLICT ---
     - name: Install Library & Clean Conflict
       run: |
         mkdir -p libraries
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
         
-        # Hapus library bawaan yang bikin crash
+        # HAPUS LIBRARY BAWAAN (Wajib!)
         echo "Menghapus library bawaan..."
         rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
 
-    # --- 4. COMPILE (DENGAN TEKNIK BYPASS) ---
+    # --- 5. COMPILE (FULL CONFIG) ---
     - name: Compile Sketch
       run: |
-        # PERHATIKAN BEDANYA:
-        # 1. Saya MENGHAPUS 'usb=composite' dari baris --fqbn (karena ini sumber error).
-        # 2. Saya MENAMBAHKAN --build-property "build.extra_flags=-DUSB_COMPOSITE"
-        #    Ini perintah paksa ke otak compiler untuk mengaktifkan USB tanpa lewat menu.
+        # PERUBAHAN V11:
+        # Saya menambahkan 'bootloader_version=original'.
+        # Ini penting! Tanpa memilih bootloader, menu 'usb' seringkali tidak dianggap ada.
         
-        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz \
-        --build-property "build.extra_flags=-DUSB_COMPOSITE" \
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,bootloader_version=original,usb=composite \
         --libraries libraries \
         --output-dir build \
+        --verbose \
         MidiV7/MidiV7.ino
 
     - name: Upload Firmware Artifact
