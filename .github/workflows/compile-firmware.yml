@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V8 (Force USB)
+name: Compile STM32 MIDI V9 (Fix Library Conflict)
 
 on: [push, workflow_dispatch]
 
@@ -13,7 +13,7 @@ jobs:
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # --- 1. PERBAIKAN STRUKTUR FOLDER ---
+    # --- 1. RAPIIKAN FOLDER ---
     - name: Fix Folder Structure
       run: |
         mkdir -p MidiV7
@@ -31,29 +31,28 @@ jobs:
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    # --- 3. DEBUG: LIHAT OPSI BOARD (Jaga-jaga) ---
-    # Langkah ini akan mencetak daftar menu yang valid ke Log
-    # Jika gagal lagi, kita bisa lihat nama menu aslinya di sini.
-    - name: Check Board Options
-      run: |
-        arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
-
-    # --- 4. INSTALL LIBRARY ---
-    - name: Install Library USBComposite
+    # --- 3. INSTALL LIBRARY MANUAL ---
+    - name: Install Library USBComposite (Git)
       run: |
         mkdir -p libraries
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
 
-    # --- 5. COMPILE DENGAN TEKNIK BYPASS ---
+    # --- 4. HAPUS LIBRARY BAWAAN (SOLUSI UTAMA) ---
+    # Kita hapus library USBComposite bawaan sistem agar compiler
+    # TERPAKSA memakai library yang baru kita clone di atas.
+    - name: Remove Built-in Conflicting Library
+      run: |
+        echo "Menghapus library bawaan yang bikin error..."
+        rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
+        echo "Library bawaan dihapus. Sekarang aman."
+
+    # --- 5. COMPILE ---
     - name: Compile Sketch
       run: |
-        # PERUBAHAN:
-        # 1. Saya menghapus bagian 'usb=composite' dari --fqbn karena itu penyebab error.
-        # 2. Saya menambahkan --build-property "build.extra_flags=-DUSB_COMPOSITE"
-        #    Ini fungsinya MEMAKSA fitur USB aktif tanpa lewat menu.
+        # Kita gunakan C8 agar menu 'usb=composite' valid.
+        # Kita kembalikan opsi 'usb=composite' karena library manual butuh ini.
         
-        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz \
-        --build-property "build.extra_flags=-DUSB_COMPOSITE" \
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
         --libraries libraries \
         --output-dir build \
         MidiV7/MidiV7.ino
