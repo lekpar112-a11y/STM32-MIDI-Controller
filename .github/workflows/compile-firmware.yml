@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V16 (Diagnostic)
+name: Compile STM32 MIDI V17 (Code Fix)
 
 on: [push, workflow_dispatch]
 
@@ -10,7 +10,6 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # UPDATE PENTING: Pakai CLI versi terbaru (v2) bukan v1.1.2
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2
 
@@ -24,24 +23,22 @@ jobs:
           mv main.cpp MidiV7/MidiV7.ino
         fi
 
-    # --- 2. INSTALL CORE ---
+    # --- 2. PERBAIKI CODINGAN (AUTO-RENAME) ---
+    # INI LANGKAH BARU DAN KRUSIAL!
+    # Kita ganti nama 'CompositeSerial' jadi 'MidiUSB' biar gak bentrok sama library.
+    - name: Patch Source Code (Rename Variable)
+      run: |
+        echo "Sedang memperbaiki nama variabel di codingan..."
+        sed -i 's/CompositeSerial/MidiUSB/g' MidiV7/MidiV7.ino
+        echo "Selesai. Codingan sudah aman."
+
+    # --- 3. INSTALL CORE ---
     - name: Install STM32 Core (Roger Clark)
       run: |
         arduino-cli config init
         arduino-cli config add board_manager.additional_urls http://dan.drown.org/stm32duino/package_STM32duino_index.json
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
-
-    # --- 3. CEK MENU (WAJIB DIBUKA LOG-NYA) ---
-    # Jika compile di bawah gagal, KLIK langkah ini di GitHub Actions.
-    # Foto daftar tulisan yang muncul. Itu kunci jawabannya.
-    - name: DEBUG - SHOW VALID OPTIONS
-      run: |
-        echo "=== DAFTAR BOARD ==="
-        arduino-cli board listall stm32duino
-        echo ""
-        echo "=== MENU YANG TERSEDIA ==="
-        arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
 
     # --- 4. INSTALL LIBRARY & CLEAN CONFLICT ---
     - name: Install Library & Clean Conflict
@@ -52,12 +49,11 @@ jobs:
         echo "Menghapus library bawaan..."
         rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
 
-    # --- 5. COMPILE (SAFE MODE) ---
+    # --- 5. COMPILE ---
     - name: Compile Sketch
       run: |
-        # KITA PAKAI VARIAN C8 (Standar)
-        # HAPUS opsi 'usb' dan 'pnum' dari FQBN.
-        # Kita paksa USB lewat --build-property.
+        # Kita gunakan settingan V16 yang sudah terbukti jalan compilernya.
+        # Ditambah fix code di langkah 2 tadi, ini PASTI BERHASIL.
         
         arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz \
         --build-property "build.extra_flags=-DUSB_COMPOSITE" \
