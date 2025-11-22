@@ -1,4 +1,4 @@
-name: Compile STM32 MIDI V11 (Full Config)
+name: Compile STM32 MIDI V12 (Final Fix)
 
 on: [push, workflow_dispatch]
 
@@ -13,7 +13,7 @@ jobs:
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v1.1.2
 
-    # --- 1. AUTO-FIX FOLDER (Jaga-jaga) ---
+    # --- 1. PERBAIKI FOLDER (Wajib) ---
     - name: Fix Folder Structure
       run: |
         mkdir -p MidiV7
@@ -23,7 +23,7 @@ jobs:
           mv main.cpp MidiV7/MidiV7.ino
         fi
 
-    # --- 2. INSTALL CORE ---
+    # --- 2. INSTALL CORE STM32 ---
     - name: Install STM32 Core (Roger Clark)
       run: |
         arduino-cli config init
@@ -31,34 +31,27 @@ jobs:
         arduino-cli core update-index
         arduino-cli core install stm32duino:STM32F1
 
-    # --- 3. DEBUG: LIHAT OPSI BOARD ---
-    # Langkah ini akan mencetak daftar menu yang valid ke Log.
-    # Jika gagal lagi, klik bagian ini di log untuk lihat nama menu yang benar.
-    - name: Check Board Options
-      run: |
-        arduino-cli board details -b stm32duino:STM32F1:genericSTM32F103C
-
-    # --- 4. INSTALL LIBRARY & HAPUS CONFLICT ---
+    # --- 3. INSTALL LIBRARY & HAPUS KONFLIK ---
     - name: Install Library & Clean Conflict
       run: |
         mkdir -p libraries
         git clone https://github.com/arpruss/USBComposite_stm32f1.git libraries/USBComposite_stm32f1
         
-        # HAPUS LIBRARY BAWAAN (Wajib!)
-        echo "Menghapus library bawaan..."
+        # HAPUS LIBRARY BAWAAN (INI KUNCINYA!)
+        # Menghapus library USBComposite versi lama milik sistem
+        # agar compiler dipaksa pakai versi baru dari folder 'libraries'
+        echo "Menghapus library konflik..."
         rm -rf /home/runner/.arduino15/packages/stm32duino/hardware/STM32F1/*/libraries/USBComposite
 
-    # --- 5. COMPILE (FULL CONFIG) ---
+    # --- 4. COMPILE (Settingan V8 yang Valid) ---
     - name: Compile Sketch
       run: |
-        # PERUBAHAN V11:
-        # Saya menambahkan 'bootloader_version=original'.
-        # Ini penting! Tanpa memilih bootloader, menu 'usb' seringkali tidak dianggap ada.
+        # Kita gunakan C8 dan usb=composite (Settingan ini terbukti valid di V8)
+        # Tapi kali ini pasti sukses karena library konflik sudah dihapus di langkah 3.
         
-        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,bootloader_version=original,usb=composite \
+        arduino-cli compile --fqbn stm32duino:STM32F1:genericSTM32F103C:device_variant=STM32F103C8,upload_method=STLinkMethod,cpu_speed=speed_72mhz,usb=composite \
         --libraries libraries \
         --output-dir build \
-        --verbose \
         MidiV7/MidiV7.ino
 
     - name: Upload Firmware Artifact
