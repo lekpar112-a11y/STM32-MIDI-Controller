@@ -1,0 +1,31 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install ARM Toolchain
+      uses: ryanwinter/arm-none-eabi-gcc@v1.0.4
+
+    - name: Build Firmware
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make
+
+    - name: Upload compiled firmware
+      uses: actions/upload-artifact@v3
+      with:
+        name: STM32-Firmware
+        path: build/*.bin
