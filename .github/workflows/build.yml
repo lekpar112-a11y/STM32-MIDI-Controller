@@ -1,26 +1,23 @@
-name: Build Firmware
+name: PlatformIO CI
 
 on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install PlatformIO
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PlatformIO Core
         run: pip install platformio
-
-      - name: Build STM32 firmware
-        run: platformio run -e bluepill_f103c6
-
-      - name: Build ESP32 firmware
-        run: platformio run -e esp32_ble_midi
-
-      - name: Upload artifacts
+      - name: Build firmware
+        run: pio run
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-binaries
-          path: |
-            .pio/build/bluepill_f103c6/firmware.bin
-            .pio/build/esp32_ble_midi/firmware.bin
+          name: firmware
+          path: .pio/build/**/firmware.bin
