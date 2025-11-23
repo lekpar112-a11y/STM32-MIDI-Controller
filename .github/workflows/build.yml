@@ -1,31 +1,26 @@
-name: Build STM32 Firmware
+name: Build Firmware
 
-on:
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install ARM GCC
-      uses: carlosperate/arm-none-eabi-gcc-action@v1
-      with:
-        version: '14.2.Rel1'
+      - name: Install PlatformIO
+        run: pip install platformio
 
-    - name: Build firmware
-      run: |
-        mkdir build
-        cd build
-        cmake ..
-        make
+      - name: Build STM32 firmware
+        run: platformio run -e bluepill_f103c6
 
-    - name: Upload firmware artifact (.bin)
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware
-        path: build/*.bin
+      - name: Build ESP32 firmware
+        run: platformio run -e esp32_ble_midi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: |
+            .pio/build/bluepill_f103c6/firmware.bin
+            .pio/build/esp32_ble_midi/firmware.bin
