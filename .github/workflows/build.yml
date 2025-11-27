@@ -1,23 +1,14 @@
-name: PlatformIO CI
+name: Build Firmware
 
-on: [push, pull_request]
+on:
+  push:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v3
+      - uses: platformio/action@v2
         with:
-          python-version: '3.x'
-      - name: Install PlatformIO Core
-        run: pip install platformio
-      - name: Build firmware
-        run: pio run
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware
-          path: .pio/build/**/firmware.bin
+          platforms: ststm32
