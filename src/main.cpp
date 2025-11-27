@@ -1,37 +1,89 @@
 #include <Arduino.h>
-#include <EEPROM.h>
-#include <USBMIDI.h>
+#include <USBComposite.h>
 
-// ====== PIN DEFINISI ======
-#define BUTTON_PIN PA0
+#define ROWS 8
+#define COLS 16
 
-// ====== EEPROM ADDRESS ======
-#define EEPROM_ADDR_NOTE 0   // Menyimpan nada terakhir
-byte midiNote = 60;          // Default C4
+// Pin STM32 universal (bisa diubah nanti via konfigurasi)
+uint8_t rowPins[ROWS] = {PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
+uint8_t colPins[COLS] = {PB0, PB1, PB10, PB11, PB12, PB13, PB14, PB15,
+                         PA8, PA9, PA10, PA11, PA12, PA15, PB3, PB4};
 
-USBMIDI USBmidi;
+bool keyState[ROWS][COLS];
+bool lastState[ROWS][COLS];
 
-// ====== SETUP ======
-void setup() {
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-    EEPROM.begin();                 // Start EEPROM Emulation
-    midiNote = EEPROM.read(EEPROM_ADDR_NOTE);  
-    if (midiNote < 10 || midiNote > 120) midiNote = 60;  // Validasi
-    USBmidi.begin();
+USBMIDI midi;
+
+// MIDI Note Base
+int baseNote = 36; // C2 default keyboard
+
+// Anti‑ghosting function
+bool isGhosting(int r, int c) {
+    int countRow = 0;
+    int countCol = 0;
+
+    for (int x = 0; x < COLS; x++)
+        if (keyState[r][x]) countRow++;
+
+    for (int y = 0; y < ROWS; y++)
+        if (keyState[y][c]) countCol++;
+
+    return (countRow > 1 && countCol > 1);
 }
 
-// ====== LOOP ======
-void loop() {
-    static bool lastState = HIGH;
-    bool currentState = digitalRead(BUTTON_PIN);
+void setupMatrixPins() {
+    for (int r = 0; r < ROWS; r++) {
+        pinMode(rowPins[r], OUTPUT);
+        digitalWrite(rowPins[r], LOW);
+    }
+    for (int c = 0; c < COLS; c++) {
+        pinMode(colPins[c], INPUT_PULLDOWN);
+    }
+}
 
-    if (lastState == HIGH && currentState == LOW) {
-        USBmidi.sendNoteOn(midiNote, 127, 1);
-        EEPROM.write(EEPROM_ADDR_NOTE, midiNote);
-        EEPROM.commit();
+void scanMatrix() {
+    for (int r = 0; r < ROWS; r++) {
+        digitalWrite(rowPins[r], HIGH);
+
+        delayMicroseconds(250);
+
+        for (int c = 0; c < COLS; c++) {
+            keyState[r][c] = digitalRead(colPins[c]);
+        }
+
+        digitalWrite(rowPins[r], LOW);
     }
-    if (lastState == LOW && currentState == HIGH) {
-        USBmidi.sendNoteOff(midiNote, 0, 1);
+}
+
+void sendMIDI() {
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            if (keyState[r][c] != lastState[r][c]) {
+                
+                // Cegah ghosting kirim note random
+                if (keyState[r][c] && isGhosting(r, c)) continue;
+
+                int note = baseNote + (r * COLS + c);
+
+                if (keyState[r][c])
+                    midi.sendNoteOn(1, note, 127);
+                else
+                    midi.sendNoteOff(1, note, 0);
+
+                lastState[r][c] = keyState[r][c];
+            }
+        }
     }
-    lastState = currentState;
+}
+
+void setup() {
+    USBComposite.setProductString("Universal Keyboard Matrix MIDI");
+    midi.begin();
+    setupMatrixPins();
+}
+
+void loop() {
+    scanMatrix();
+    sendMIDI();
+    delay(3);
 }
